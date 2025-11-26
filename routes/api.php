@@ -1,0 +1,201 @@
+<?php
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\ReportController;
+use App\Http\Controllers\Api\AdminAuthController;
+use App\Http\Controllers\AdminProfileController;
+use App\Http\Controllers\ReportGenerationController; 
+use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\JournalAuditController;
+use App\Http\Controllers\TeamAuthController;
+use App\Http\Controllers\TeamController;
+use App\Http\Controllers\TeamProfileController;
+
+/*
+|--------------------------------------------------------------------------
+| API Routes - FOSIKA
+|--------------------------------------------------------------------------
+*/
+
+// -------------------------
+// Route de base
+// -------------------------
+Route::get('/', function () {
+    return response()->json([
+        'message' => 'FOSIKA API is running',
+        'version' => '1.0.0',
+        'timestamp' => now()
+    ]);
+});
+
+// Route pour vérifier l'état des fichiers d'un rapport
+Route::get('/reports/{reference}/files-status', [ReportController::class, 'getFilesStatus']);
+
+// Routes pour la gestion des fichiers
+Route::get('/reports/{reference}/files-status', [ReportController::class, 'getFilesStatus']);
+Route::post('/reports/{reference}/generate-files', [ReportController::class, 'generateMissingFiles']);
+
+// -------------------------
+// Route de santé
+// -------------------------
+Route::get('/health', function () {
+    return response()->json([
+        'status' => 'healthy',
+        'timestamp' => now()
+    ]);
+});
+
+// -------------------------
+// Routes publiques
+// -------------------------
+Route::post('/reports', [ReportController::class, 'store']);
+Route::get('/reports/{reference}', [ReportController::class, 'show']);
+Route::get('/tracking/{reference}', [ReportController::class, 'checkTracking']);
+Route::get('/reports', [ReportController::class, 'index']);
+
+// -------------------------
+// Routes pour les fichiers (PUBLIQUES - important pour le suivi)
+// -------------------------
+Route::get('/files/{filename}', [ReportController::class, 'getFile']);
+Route::get('/files/{filename}/download', [ReportController::class, 'downloadFile']);
+Route::get('/files/{filename}/url', [ReportController::class, 'getFileUrl']);
+Route::get('/reports/{reference}/files', [ReportController::class, 'getReportFiles']);
+
+// -------------------------
+// Authentification publique
+// -------------------------
+Route::post('/admin/login', [AdminAuthController::class, 'login']);
+Route::post('/team/login', [TeamAuthController::class, 'login']);
+
+// -------------------------
+// Routes d'équipe (publiques pour l'authentification)
+// -------------------------
+Route::prefix('team')->group(function () {
+    // Authentification publique
+    Route::post('/login', [TeamAuthController::class, 'login']);
+});
+
+// -------------------------
+// Routes pour les notifications (publiques ou protégées selon besoin)
+// -------------------------
+Route::prefix('notifications')->group(function () {
+    Route::get('/', [NotificationController::class, 'index']); // Notifications récentes
+    Route::get('/all', [NotificationController::class, 'getAll']); // Toutes les notifications
+    Route::get('/recent', [NotificationController::class, 'getRecent']); // Notifications récentes pour header
+    Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+    Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
+    Route::delete('/{id}', [NotificationController::class, 'destroy']);
+    Route::delete('/delete-read', [NotificationController::class, 'deleteRead']);
+});
+
+// -------------------------
+// Routes protégées par Sanctum
+// -------------------------
+Route::middleware(['auth:sanctum'])->group(function () {
+    
+    // ==================== ROUTES ÉQUIPE ====================
+    Route::prefix('team')->group(function () {
+        // Gestion de l'authentification
+        Route::get('/user', [TeamAuthController::class, 'user']);
+        Route::get('/check-auth', [TeamAuthController::class, 'checkAuth']);
+        Route::post('/logout', [TeamAuthController::class, 'logout']);
+        
+        // Gestion du profil - CORRIGÉ: utiliser TeamProfileController
+        Route::prefix('profile')->group(function () {
+            Route::get('/', [TeamProfileController::class, 'getProfile']);
+            Route::put('/', [TeamProfileController::class, 'updateProfile']);
+            Route::post('/avatar', [TeamProfileController::class, 'updateAvatar']);
+            Route::delete('/avatar', [TeamProfileController::class, 'deleteAvatar']);
+            Route::post('/password', [TeamProfileController::class, 'updatePassword']);
+            Route::get('/stats', [TeamProfileController::class, 'getPersonalStats']);
+        });
+
+        // Gestion des utilisateurs d'équipe (admin seulement)
+        Route::prefix('users')->group(function () {
+            Route::get('/', [TeamController::class, 'getAllUsers']);
+            Route::get('/agents', [TeamController::class, 'getAgents']);
+            Route::get('/investigateurs', [TeamController::class, 'getInvestigateurs']);
+            Route::get('/administrateurs', [TeamController::class, 'getAdministrateurs']);
+            Route::get('/stats', [TeamController::class, 'getStats']);
+            Route::post('/', [TeamController::class, 'createUser']);
+            Route::put('/{id}', [TeamController::class, 'updateUser']);
+            Route::delete('/{id}', [TeamController::class, 'deleteUser']);
+            Route::post('/{id}/toggle-status', [TeamController::class, 'toggleStatus']);
+            Route::post('/{id}/reset-password', [TeamController::class, 'resetPassword']);
+        });
+    });
+
+    // ==================== ROUTES SPÉCIFIQUES PAR RÔLE ====================
+    Route::prefix('agent')->middleware(['auth:sanctum', 'check.role:Agent'])->group(function () {
+        Route::prefix('profile')->group(function () {
+            Route::get('/', [TeamProfileController::class, 'getProfile']);
+            Route::put('/', [TeamProfileController::class, 'updateProfile']);
+            Route::post('/avatar', [TeamProfileController::class, 'updateAvatar']);
+            Route::post('/password', [TeamProfileController::class, 'updatePassword']);
+            Route::get('/stats', [TeamProfileController::class, 'getPersonalStats']);
+        });
+    });
+
+    Route::prefix('investigateur')->middleware(['auth:sanctum', 'check.role:Investigateur'])->group(function () {
+        Route::prefix('profile')->group(function () {
+            Route::get('/', [TeamProfileController::class, 'getProfile']);
+            Route::put('/', [TeamProfileController::class, 'updateProfile']);
+            Route::post('/avatar', [TeamProfileController::class, 'updateAvatar']);
+            Route::post('/password', [TeamProfileController::class, 'updatePassword']);
+            Route::get('/stats', [TeamProfileController::class, 'getPersonalStats']);
+        });
+    });
+
+    // ==================== ROUTES ADMINISTRATION ====================
+    Route::prefix('admin')->group(function () {
+        Route::post('/logout', [AdminAuthController::class, 'logout']);
+        Route::get('/check', [AdminAuthController::class, 'checkAuth']);
+        Route::get('/user', [AdminAuthController::class, 'user']);
+        
+        Route::prefix('profile')->group(function () {
+            Route::get('/', [AdminProfileController::class, 'getProfile']);
+            Route::put('/', [AdminProfileController::class, 'updateProfile']);
+            Route::post('/avatar', [AdminProfileController::class, 'updateAvatar']);
+            Route::delete('/avatar', [AdminProfileController::class, 'deleteAvatar']);
+            Route::post('/password', [AdminProfileController::class, 'updatePassword']);
+        });
+    });
+
+    // ==================== ROUTES RAPPORTS ====================
+    Route::prefix('reports')->group(function () {
+        Route::post('/generate', [ReportGenerationController::class, 'generateReport']);
+        Route::get('/last-generated', [ReportGenerationController::class, 'getLastGeneratedReport']);
+        Route::get('/generated', [ReportGenerationController::class, 'getGeneratedReports']);
+        Route::post('/{reportId}/send', [ReportGenerationController::class, 'sendReportToInstitution']);
+        Route::get('/{reportId}/download', [ReportGenerationController::class, 'downloadReport']);
+        
+        // Routes existantes pour la gestion des rapports
+        Route::put('/{id}/status', [ReportController::class, 'updateStatus']);
+        Route::put('/{id}/workflow', [ReportController::class, 'updateWorkflow']);
+    });
+
+    // ==================== STATISTIQUES ====================
+    Route::get('/stats', [ReportController::class, 'getStats']);
+
+    // ==================== NOTIFICATIONS PROTÉGÉES ====================
+    Route::prefix('notifications')->group(function () {
+        Route::get('/unread-count', [NotificationController::class, 'getUnreadCount']);
+    });
+
+    // ==================== JOURNAL D'AUDIT ====================
+    Route::prefix('journal-audit')->group(function () {
+        Route::get('/', [JournalAuditController::class, 'getJournalData']);
+        Route::post('/export', [JournalAuditController::class, 'exportAudit']);
+    });
+});
+
+// -------------------------
+// Route fallback
+// -------------------------
+Route::fallback(function () {
+    return response()->json([
+        'success' => false,
+        'message' => 'Endpoint not found'
+    ], 404);
+});
