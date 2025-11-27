@@ -29,13 +29,6 @@ Route::get('/', function () {
     ]);
 });
 
-// Route pour vérifier l'état des fichiers d'un rapport
-Route::get('/reports/{reference}/files-status', [ReportController::class, 'getFilesStatus']);
-
-// Routes pour la gestion des fichiers
-Route::get('/reports/{reference}/files-status', [ReportController::class, 'getFilesStatus']);
-Route::post('/reports/{reference}/generate-files', [ReportController::class, 'generateMissingFiles']);
-
 // -------------------------
 // Route de santé
 // -------------------------
@@ -47,20 +40,23 @@ Route::get('/health', function () {
 });
 
 // -------------------------
-// Routes publiques
+// Routes publiques - Signalements
 // -------------------------
 Route::post('/reports', [ReportController::class, 'store']);
+Route::get('/reports', [ReportController::class, 'index']);
 Route::get('/reports/{reference}', [ReportController::class, 'show']);
 Route::get('/tracking/{reference}', [ReportController::class, 'checkTracking']);
-Route::get('/reports', [ReportController::class, 'index']);
 
 // -------------------------
-// Routes pour les fichiers (PUBLIQUES - important pour le suivi)
+// Routes pour les fichiers (PUBLIQUES)
 // -------------------------
+Route::post('/upload', [ReportController::class, 'uploadFile']);
 Route::get('/files/{filename}', [ReportController::class, 'getFile']);
 Route::get('/files/{filename}/download', [ReportController::class, 'downloadFile']);
 Route::get('/files/{filename}/url', [ReportController::class, 'getFileUrl']);
 Route::get('/reports/{reference}/files', [ReportController::class, 'getReportFiles']);
+Route::get('/reports/{reference}/files-status', [ReportController::class, 'getFilesStatus']);
+Route::post('/reports/{reference}/generate-files', [ReportController::class, 'generateMissingFiles']);
 
 // -------------------------
 // Authentification publique
@@ -69,20 +65,12 @@ Route::post('/admin/login', [AdminAuthController::class, 'login']);
 Route::post('/team/login', [TeamAuthController::class, 'login']);
 
 // -------------------------
-// Routes d'équipe (publiques pour l'authentification)
-// -------------------------
-Route::prefix('team')->group(function () {
-    // Authentification publique
-    Route::post('/login', [TeamAuthController::class, 'login']);
-});
-
-// -------------------------
-// Routes pour les notifications (publiques ou protégées selon besoin)
+// Routes pour les notifications (publiques)
 // -------------------------
 Route::prefix('notifications')->group(function () {
-    Route::get('/', [NotificationController::class, 'index']); // Notifications récentes
-    Route::get('/all', [NotificationController::class, 'getAll']); // Toutes les notifications
-    Route::get('/recent', [NotificationController::class, 'getRecent']); // Notifications récentes pour header
+    Route::get('/', [NotificationController::class, 'index']);
+    Route::get('/all', [NotificationController::class, 'getAll']);
+    Route::get('/recent', [NotificationController::class, 'getRecent']);
     Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
     Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
     Route::delete('/{id}', [NotificationController::class, 'destroy']);
@@ -101,7 +89,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/check-auth', [TeamAuthController::class, 'checkAuth']);
         Route::post('/logout', [TeamAuthController::class, 'logout']);
         
-        // Gestion du profil - CORRIGÉ: utiliser TeamProfileController
+        // Gestion du profil
         Route::prefix('profile')->group(function () {
             Route::get('/', [TeamProfileController::class, 'getProfile']);
             Route::put('/', [TeamProfileController::class, 'updateProfile']);
@@ -127,7 +115,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 
     // ==================== ROUTES SPÉCIFIQUES PAR RÔLE ====================
-    Route::prefix('agent')->middleware(['auth:sanctum', 'check.role:Agent'])->group(function () {
+    Route::prefix('agent')->middleware(['check.role:Agent'])->group(function () {
         Route::prefix('profile')->group(function () {
             Route::get('/', [TeamProfileController::class, 'getProfile']);
             Route::put('/', [TeamProfileController::class, 'updateProfile']);
@@ -137,7 +125,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
     });
 
-    Route::prefix('investigateur')->middleware(['auth:sanctum', 'check.role:Investigateur'])->group(function () {
+    Route::prefix('investigateur')->middleware(['check.role:Investigateur'])->group(function () {
         Route::prefix('profile')->group(function () {
             Route::get('/', [TeamProfileController::class, 'getProfile']);
             Route::put('/', [TeamProfileController::class, 'updateProfile']);
@@ -162,7 +150,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
     });
 
-    // ==================== ROUTES RAPPORTS ====================
+    // ==================== ROUTES RAPPORTS PROTÉGÉES ====================
     Route::prefix('reports')->group(function () {
         Route::post('/generate', [ReportGenerationController::class, 'generateReport']);
         Route::get('/last-generated', [ReportGenerationController::class, 'getLastGeneratedReport']);
@@ -170,9 +158,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/{reportId}/send', [ReportGenerationController::class, 'sendReportToInstitution']);
         Route::get('/{reportId}/download', [ReportGenerationController::class, 'downloadReport']);
         
-        // Routes existantes pour la gestion des rapports
+        // Gestion des rapports
         Route::put('/{id}/status', [ReportController::class, 'updateStatus']);
         Route::put('/{id}/workflow', [ReportController::class, 'updateWorkflow']);
+        Route::post('/{id}/files', [ReportController::class, 'uploadFiles']);
     });
 
     // ==================== STATISTIQUES ====================

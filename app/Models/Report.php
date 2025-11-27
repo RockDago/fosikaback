@@ -17,10 +17,6 @@ class Report extends Model
         'category', 
         'description', 
         'files', 
-        'ip_address',
-        'country', 
-        'region', 
-        'city', 
         'status', 
         'workflow', 
         'accept_terms', 
@@ -59,11 +55,6 @@ class Report extends Model
         static::creating(function ($report) {
             // Générer une référence unique
             $report->reference = self::generateReference();
-
-            // Valeurs par défaut pour la localisation
-            $report->country = 'Madagascar';
-            $report->region = 'Analamanga';
-            $report->city = 'Antananarivo';
         });
 
         static::created(function ($report) {
@@ -71,17 +62,52 @@ class Report extends Model
                 // Créer les logs de workflow
                 $report->initializeWorkflow();
                 
-                // Créer le tracking
-                \App\Models\Tracking::create([
-                    'reference' => $report->reference,
-                    'status' => $report->status,
-                    'current_stage' => 'DRSE',
-                    'last_update' => now()
-                ]);
+                // Ne PAS créer de tracking pour les doublons
+                if ($report->status !== 'doublon') {
+                    // Vérifier si le tracking existe déjà
+                    $existingTracking = \App\Models\Tracking::where('reference', $report->reference)->first();
+                    
+                    if (!$existingTracking) {
+                        \App\Models\Tracking::create([
+                            'reference' => $report->reference,
+                            'status' => $report->status,
+                            'last_update' => now()
+                        ]);
+                        
+                        Log::info("Tracking créé pour {$report->reference}");
+                    } else {
+                        Log::info("Tracking déjà existant pour {$report->reference}");
+                    }
+                } else {
+                    Log::info("Tracking non créé pour doublon {$report->reference}");
+                }
 
                 Log::info("Signalement {$report->reference} créé avec succès");
             } catch (\Exception $e) {
                 Log::error("Erreur création workflow/tracking pour {$report->reference}: " . $e->getMessage());
+            }
+        });
+
+        // Observer les changements de statut
+        static::updated(function ($report) {
+            // Si le statut devient doublon, supprimer le tracking
+            if ($report->isDirty('status') && $report->status === 'doublon') {
+                $tracking = \App\Models\Tracking::where('reference', $report->reference)->first();
+                if ($tracking) {
+                    $tracking->delete();
+                    Log::info("Tracking supprimé pour doublon {$report->reference}");
+                }
+            }
+            
+            // Si le statut change d'un autre état, mettre à jour le tracking
+            if ($report->isDirty('status') && $report->status !== 'doublon') {
+                \App\Models\Tracking::updateOrCreate(
+                    ['reference' => $report->reference],
+                    [
+                        'status' => $report->status,
+                        'last_update' => now()
+                    ]
+                );
             }
         });
     }
@@ -118,18 +144,17 @@ class Report extends Model
         $workflowData = [];
 
         foreach ($stages as $stage) {
-            // Créer un log de workflow dans la table dédiée si elle existe
+            // Créer un log de workflow dans la table dédiée
             try {
                 \App\Models\WorkflowLog::create([
                     'report_id' => $this->id,
-                    'stage' => $stage['stage'],
+                    'step' => $stage['stage'],
                     'status' => $stage['status'],
-                    'progress' => $stage['progress'],
-                    'processed_by' => $stage['agent'],
+                    'agent' => $stage['agent'],
                     'processed_at' => $stage['processed_at']
                 ]);
             } catch (\Exception $e) {
-                Log::warning("WorkflowLog table may not exist: " . $e->getMessage());
+                Log::warning("Erreur création WorkflowLog: " . $e->getMessage());
             }
 
             // Stocker dans le champ JSON workflow
@@ -193,7 +218,7 @@ class Report extends Model
             'finalise' => ['classifier'],
             'doublon' => ['en_cours'],
             'refuse' => ['en_cours'],
-            'classifier' => [] // Un dossier classifié ne peut plus changer de statut
+            'classifier' => []
         ];
 
         return $transitions[$this->status] ?? [];
@@ -288,11 +313,6 @@ class Report extends Model
     public function scopeByCategory($query, $category)
     {
         return $query->where('category', $category);
-    }
-
-    public function scopeByRegion($query, $region)
-    {
-        return $query->where('region', $region);
     }
 
     /**

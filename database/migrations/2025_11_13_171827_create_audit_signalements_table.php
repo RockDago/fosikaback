@@ -1,5 +1,4 @@
 <?php
-// database/migrations/2024_01_01_create_audit_signalements_table.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -19,7 +18,7 @@ class CreateAuditSignalementsTable extends Migration
             $table->string('identite'); // "Anonyme" ou nom complet
             $table->string('telephone');
             $table->string('email');
-            $table->string('region_province');
+            // ✅ SUPPRIMÉ: $table->string('region_province');
             $table->string('type_fraude');
             $table->string('statut')->default('Reçu');
             $table->json('details_supplementaires')->nullable();

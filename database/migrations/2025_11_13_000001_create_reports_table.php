@@ -19,12 +19,6 @@ return new class extends Migration
             $table->string('category');
             $table->text('description');
             $table->json('files')->nullable();
-            $table->string('ip_address');
-            $table->string('country')->nullable();
-            $table->string('region')->nullable();
-            $table->string('city')->nullable();
-            $table->boolean('is_vpn')->default(false);
-            $table->boolean('vpn_blocked')->default(false);
             
             // ✅ AJOUT de 'classifier' dans l'enum status
             $table->enum('status', ['en_cours', 'finalise', 'doublon', 'refuse', 'classifier'])->default('en_cours');

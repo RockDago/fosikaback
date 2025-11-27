@@ -20,7 +20,8 @@ class AuditLogger
             'identite' => $signalementData['identite'],
             'telephone' => $signalementData['telephone'],
             'email' => $signalementData['email'],
-            'region_province' => $signalementData['region_province'],
+            // ✅ CORRECTION : Supprimer region_province ou utiliser une valeur par défaut
+            'region_province' => $signalementData['region_province'] ?? 'Non spécifié',
             'type_fraude' => $signalementData['type_fraude'],
             'statut' => 'Reçu',
             'details_supplementaires' => $signalementData['details'] ?? null,
