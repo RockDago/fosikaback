@@ -3,7 +3,6 @@
 
 namespace App\Services;
 
-use App\Models\AuditSignalement;
 use App\Models\AuditSysteme;
 use Illuminate\Support\Facades\Request;
 
@@ -11,21 +10,8 @@ class AuditLogger
 {
     public static function logSignalement(array $signalementData): void
     {
-        AuditSignalement::create([
-            'reference_dossier' => $signalementData['reference'],
-            'timestamp' => now(),
-            'type_anonymat' => $signalementData['type_anonymat'],
-            'adresse_ip' => $signalementData['adresse_ip'] ?? Request::ip(),
-            'geolocalisation' => $signalementData['geolocalisation'] ?? self::getGeolocation(Request::ip()),
-            'identite' => $signalementData['identite'],
-            'telephone' => $signalementData['telephone'],
-            'email' => $signalementData['email'],
-            // ✅ CORRECTION : Supprimer region_province ou utiliser une valeur par défaut
-            'region_province' => $signalementData['region_province'] ?? 'Non spécifié',
-            'type_fraude' => $signalementData['type_fraude'],
-            'statut' => 'Reçu',
-            'details_supplementaires' => $signalementData['details'] ?? null,
-        ]);
+        // Logging of signalements is disabled. Previously this created an AuditSignalement record.
+        return;
     }
 
     public static function logSystemAction(string $userEmail, string $action, string $entite, string $statut, string $details, ?string $reference = null): void

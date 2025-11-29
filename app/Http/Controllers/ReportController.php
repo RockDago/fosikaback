@@ -19,6 +19,8 @@ use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpFoundation\Response;
 
+use App\Models\WorkflowLog;
+
 class ReportController extends Controller
 {
     protected $fileService;
@@ -27,73 +29,374 @@ class ReportController extends Controller
     {
         $this->fileService = $fileService;
     }
-public function store(Request $request)
-{
-    $validated = $request->validate([
-        'type' => 'required|string|in:anonyme,identifie',
-        'name' => 'required|string|max:255',
-        'email' => 'nullable|email|max:255',
-        'phone' => 'nullable|string|max:50',
-        'address' => 'nullable|string|max:500',
-        'category' => 'required|string|max:255',
-        'description' => 'required|string',
-        'accept_terms' => 'required|boolean',
-        'accept_truth' => 'required|boolean',
-        'files.*' => 'sometimes|file|mimes:jpg,jpeg,png,mp4,pdf|max:51200',
-    ]);
 
-    try {
-        // Créer le rapport
-        $report = Report::create([
-            'type' => $validated['type'],
-            'name' => $validated['name'],
-            'email' => $validated['email'] ?? null,
-            'phone' => $validated['phone'] ?? null,
-            'address' => $validated['address'] ?? null,
-            'category' => $validated['category'],
-            'description' => $validated['description'],
-            'accept_terms' => $validated['accept_terms'],
-            'accept_truth' => $validated['accept_truth'],
-            'status' => 'en_cours',
+    /**
+     * ✅ NOUVELLE MÉTHODE POUR CRÉER UN SIGNALEMENT (ADMIN)
+     */
+    public function createReport(Request $request): JsonResponse
+    {
+        try {
+            // Validation des données
+            $validator = Validator::make($request->all(), [
+                'category' => 'required|string|max:255',
+                'description' => 'required|string|min:10',
+                'files.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx,mp4|max:51200', // 50MB max
+                'nom_prenom' => 'nullable|string|max:255',
+                'email' => 'nullable|email|max:255',
+                'telephone' => 'nullable|string|max:20',
+                'city' => 'nullable|string|max:255',
+                'province' => 'nullable|string|max:255',
+                'region' => 'nullable|string|max:255',
+                'type_signalement' => 'required|in:anonyme,non-anonyme'
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de validation',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            // Déterminer le type
+            $type = $request->type_signalement === 'anonyme' ? 'anonyme' : 'identifie';
+            $isAnonymous = $type === 'anonyme';
+
+            // Préparer les données
+            $reportData = [
+                'type' => $type,
+                'category' => $request->category,
+                'description' => $request->description,
+                'status' => 'en_cours',
+                'accept_terms' => true,
+                'accept_truth' => true,
+                'has_proof' => false // Initialisé à false
+            ];
+
+            // Ajouter les informations personnelles si non anonyme
+            if (!$isAnonymous) {
+                $reportData['name'] = $request->nom_prenom;
+                $reportData['email'] = $request->email;
+                $reportData['phone'] = $request->telephone;
+            }
+
+            // Ajouter les informations géographiques
+            $reportData['city'] = $request->city;
+            $reportData['province'] = $request->province;
+            $reportData['region'] = $request->region;
+
+            // Gérer les fichiers uploadés
+            $uploadedFiles = [];
+            if ($request->hasFile('files')) {
+                foreach ($request->file('files') as $file) {
+                    $fileName = $this->storeFile($file);
+                    if ($fileName) {
+                        $uploadedFiles[] = $fileName;
+                    }
+                }
+                
+                if (!empty($uploadedFiles)) {
+                    $reportData['files'] = $uploadedFiles;
+                    $reportData['has_proof'] = true; // ✅ METTRE À JOUR has_proof
+                }
+            }
+
+            // Créer le signalement
+            $report = Report::create($reportData);
+
+            // Journal d'audit
+            $userEmail = auth()->check() ? auth()->user()->email : 'Système';
+            AuditLogger::logCreation(
+                $userEmail,
+                'Signalement',
+                "Nouveau signalement créé: {$report->reference}",
+                $report->reference
+            );
+
+            Log::info("✅ Signalement créé avec succès", [
+                'reference' => $report->reference,
+                'category' => $report->category,
+                'has_proof' => $report->has_proof,
+                'files_count' => count($uploadedFiles)
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Signalement créé avec succès',
+                'data' => [
+                    'reference' => $report->reference,
+                    'category' => $report->category,
+                    'has_proof' => $report->has_proof,
+                    'files_count' => count($uploadedFiles),
+                    'created_at' => $report->created_at->toISOString()
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            Log::error('💥 Erreur création signalement admin: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la création du signalement',
+                'error' => config('app.debug') ? $e->getMessage() : 'Erreur interne du serveur'
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ MÉTHODE POUR STOCKER UN FICHIER
+     */
+    private function storeFile($file)
+    {
+        try {
+            $originalName = $file->getClientOriginalName();
+            $extension = $file->getClientOriginalExtension();
+            
+            // Générer un nom unique
+            $fileName = time() . '_' . Str::random(8) . '.' . $extension;
+            
+            // Stocker dans le dossier reports
+            $path = $file->storeAs('reports', $fileName, 'public');
+            
+            return $fileName;
+            
+        } catch (\Exception $e) {
+            Log::error('Erreur stockage fichier: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * ✅ MÉTHODE EXISTANTE POUR LE PUBLIC (MAINTENUE)
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'type' => 'required|string|in:anonyme,identifie',
+            'name' => 'required|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'phone' => 'nullable|string|max:50',
+            'address' => 'nullable|string|max:500',
+            'category' => 'required|string|max:255',
+            'description' => 'required|string',
+            'accept_terms' => 'required|boolean',
+            'accept_truth' => 'required|boolean',
+            'files.*' => 'sometimes|file|mimes:jpg,jpeg,png,mp4,pdf|max:51200',
         ]);
 
-        // Sauvegarder les fichiers - STOCKER UNIQUEMENT LES NOMS
-        $fileNames = [];
-        if ($request->hasFile('files')) {
-            foreach ($request->file('files') as $index => $file) {
-                $extension = $file->getClientOriginalExtension();
-                $fileName = "preuve_" . ($index + 1) . "_" . $report->reference . "." . $extension;
+        try {
+            // Créer le rapport
+            $report = Report::create([
+                'type' => $validated['type'],
+                'name' => $validated['name'],
+                'email' => $validated['email'] ?? null,
+                'phone' => $validated['phone'] ?? null,
+                'address' => $validated['address'] ?? null,
+                'category' => $validated['category'],
+                'description' => $validated['description'],
+                'accept_terms' => $validated['accept_terms'],
+                'accept_truth' => $validated['accept_truth'],
+                'status' => 'en_cours',
+                'has_proof' => false // Initialisé à false
+            ]);
+
+            // Sauvegarder les fichiers
+            $fileNames = [];
+            if ($request->hasFile('files')) {
+                foreach ($request->file('files') as $index => $file) {
+                    $fileName = $this->storeFile($file);
+                    if ($fileName) {
+                        $fileNames[] = $fileName;
+                    }
+                }
                 
-                // Stocker le fichier
-                $file->storeAs('reports', $fileName, 'public');
-                
-                // Ajouter uniquement le nom du fichier (pas l'URL complète)
-                $fileNames[] = $fileName;
+                // Sauvegarder les noms de fichiers et mettre à jour has_proof
+                if (!empty($fileNames)) {
+                    $report->update([
+                        'files' => $fileNames,
+                        'has_proof' => true
+                    ]);
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Signalement créé avec succès',
+                'reference' => $report->reference,
+                'has_proof' => $report->has_proof,
+                'files' => $fileNames
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur création signalement public: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur interne: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * ✅ MÉTHODE POUR SUPPRIMER UN SIGNALEMENT
+     */
+ public function destroy($id): JsonResponse
+{
+    try {
+        $report = Report::findOrFail($id);
+        $reference = $report->reference;
+
+        // Supprimer les fichiers associés SI ils existent
+        if (!empty($report->files)) {
+            $files = $report->files;
+            
+            // Si files est une chaîne JSON, la décoder
+            if (is_string($files)) {
+                $files = json_decode($files, true);
             }
             
-            // Sauvegarder les noms de fichiers en JSON
-            $report->files = $fileNames;
-            $report->save();
+            // Si files est un tableau, supprimer chaque fichier
+            if (is_array($files)) {
+                foreach ($files as $filename) {
+                    // Chemins possibles
+                    $possiblePaths = [
+                        storage_path('app/public/reports/' . $filename),
+                        public_path('storage/reports/' . $filename),
+                        public_path('uploads/reports/' . $filename),
+                    ];
+                    
+                    foreach ($possiblePaths as $filePath) {
+                        if (file_exists($filePath)) {
+                            try {
+                                unlink($filePath);
+                                \Log::info("Fichier supprimé: $filePath");
+                            } catch (\Exception $e) {
+                                \Log::warning("Impossible de supprimer le fichier: $filePath - " . $e->getMessage());
+                            }
+                        }
+                    }
+                }
+            }
         }
+
+        // Supprimer le signalement de la base de données
+        $report->delete();
+
+        // Journal d'audit (si AuditLogger existe)
+        try {
+            $userEmail = auth()->check() ? auth()->user()->email : 'Système';
+            if (class_exists('AuditLogger')) {
+                \AuditLogger::logSuppression(
+                    $userEmail,
+                    'Signalement',
+                    "Signalement supprimé : $reference",
+                    $reference
+                );
+            }
+        } catch (\Exception $e) {
+            \Log::warning("Erreur audit log: " . $e->getMessage());
+        }
+
+        \Log::info("Signalement supprimé avec succès: $reference");
 
         return response()->json([
             'success' => true,
-            'message' => 'Signalement créé avec succès',
-            'reference' => $report->reference,
-            'files' => $fileNames
-        ]);
-
-    } catch (\Exception $e) {
-        Log::error('Erreur création signalement: ' . $e->getMessage());
+            'message' => 'Signalement supprimé avec succès'
+        ], 200);
+        
+    } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+        \Log::error("Signalement non trouvé: ID $id");
         return response()->json([
             'success' => false,
-            'message' => 'Erreur interne: ' . $e->getMessage()
+            'message' => 'Signalement non trouvé'
+        ], 404);
+        
+    } catch (\Exception $e) {
+        \Log::error('Erreur suppression signalement ID ' . $id . ': ' . $e->getMessage());
+        \Log::error('Stack trace: ' . $e->getTraceAsString());
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la suppression du signalement',
+            'error' => config('app.debug') ? $e->getMessage() : 'Erreur interne'
         ], 500);
     }
 }
 
+    /**
+     * ✅ MÉTHODE POUR METTRE À JOUR UN SIGNALEMENT
+     */
+    public function update(Request $request, $id): JsonResponse
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'category' => 'sometimes|required|string|max:255',
+                'description' => 'sometimes|required|string|min:10',
+                'nom_prenom' => 'nullable|string|max:255',
+                'email' => 'nullable|email|max:255',
+                'telephone' => 'nullable|string|max:20',
+                'city' => 'nullable|string|max:255',
+                'province' => 'nullable|string|max:255',
+                'region' => 'nullable|string|max:255',
+            ]);
 
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de validation',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
 
+            $report = Report::findOrFail($id);
+            
+            // Vérifier si le signalement peut être modifié
+            if (!$report->canBeModified()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Ce signalement ne peut plus être modifié'
+                ], 403);
+            }
+
+            $updateData = [];
+            
+            // Mettre à jour les champs fournis
+            if ($request->has('category')) $updateData['category'] = $request->category;
+            if ($request->has('description')) $updateData['description'] = $request->description;
+            if ($request->has('nom_prenom')) $updateData['name'] = $request->nom_prenom;
+            if ($request->has('email')) $updateData['email'] = $request->email;
+            if ($request->has('telephone')) $updateData['phone'] = $request->telephone;
+            if ($request->has('city')) $updateData['city'] = $request->city;
+            if ($request->has('province')) $updateData['province'] = $request->province;
+            if ($request->has('region')) $updateData['region'] = $request->region;
+
+            $report->update($updateData);
+
+            // Journal d'audit
+            $userEmail = auth()->check() ? auth()->user()->email : 'Système';
+            AuditLogger::logModification(
+                $userEmail,
+                'Signalement',
+                "Signalement modifié: {$report->reference}",
+                $report->reference
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Signalement modifié avec succès',
+                'data' => $report
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur modification signalement: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la modification du signalement'
+            ], 500);
+        }
+    }
 
     /**
      * Fonction pour sauvegarder les fichiers Base64
@@ -223,119 +526,129 @@ public function store(Request $request)
         }
     }
 
-    /**
-     * Lister tous les signalements avec formatage
-     */
-    public function index(Request $request): JsonResponse
-    {
-        try {
-            $userEmail = auth()->check() ? auth()->user()->email : 'API Guest';
-            
+/**
+ * Lister tous les signalements avec workflow
+ */
+public function index(Request $request): JsonResponse
+{
+    try {
+        $userEmail = auth()->check() ? auth()->user()->email : 'API Guest';
+        
+        // Journal d'audit
+        if (class_exists('App\Services\AuditLogger')) {
             AuditLogger::logConsultation(
                 $userEmail,
                 'Signalements',
                 "Consultation de la liste des signalements",
                 null
             );
+        }
 
-            Log::info('API Reports accessed', [
-                'url' => $request->fullUrl(),
-                'user_agent' => $request->userAgent()
-            ]);
+        Log::info('API Reports accessed', [
+            'url' => $request->fullUrl(),
+            'user_agent' => $request->userAgent()
+        ]);
 
-            // Récupérer tous les rapports
-            $reports = Report::orderBy('created_at', 'desc')->get();
+        // Récupérer tous les rapports
+        $reports = Report::orderBy('created_at', 'desc')->get();
 
-            if ($reports->isEmpty()) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Aucun rapport trouvé',
-                    'data' => [],
-                    'count' => 0
-                ], 200);
-            }
-
-            // Formater les données
-            $formattedReports = $reports->map(function ($report) {
-                // Workflow par défaut
-                $defaultWorkflow = [
-                    'drse' => [
-                        'date' => $report->created_at->toISOString(),
-                        'status' => 'in_progress',
-                        'agent' => 'DRSE Analamanga',
-                        'progress' => 33
-                    ],
-                    'cac' => [
-                        'date' => null,
-                        'status' => 'pending',
-                        'agent' => 'CAC - Cellule Anti-Corruption',
-                        'progress' => 0
-                    ],
-                    'bianco' => [
-                        'date' => null,
-                        'status' => 'pending',
-                        'agent' => 'BIANCO',
-                        'progress' => 0
-                    ]
-                ];
-
-                // Utiliser le workflow de la base s'il existe
-                $workflowData = $defaultWorkflow;
-                if (!empty($report->workflow)) {
-                    if (is_array($report->workflow)) {
-                        $workflowData = $report->workflow;
-                    } elseif (is_string($report->workflow)) {
-                        $decoded = json_decode($report->workflow, true);
-                        if (json_last_error() === JSON_ERROR_NONE) {
-                            $workflowData = $decoded;
-                        }
-                    }
-                }
-
-                // Gestion des fichiers
-                $filesArray = [];
-                if (!empty($report->files)) {
-                    if (is_string($report->files)) {
-                        $decodedFiles = json_decode($report->files, true);
-                        if (json_last_error() === JSON_ERROR_NONE) {
-                            $filesArray = $decodedFiles;
-                        }
-                    } elseif (is_array($report->files)) {
-                        $filesArray = $report->files;
-                    }
-                }
-
-                // ✅ GÉRER LES SIGNALEMENTS SANS PREUVES
-                $hasProof = $report->has_proof ?? (count($filesArray) > 0);
-
-                return [
-                    'id' => $report->id,
-                    'reference' => $report->reference ?? 'REF-' . $report->id,
-                    'title' => $report->title ?? 'Sans titre',
-                    'description' => $report->description ?? 'Aucune description',
-                    'category' => $report->category ?? 'divers',
-                    'status' => $report->status ?? 'en_cours',
-                    'type' => $report->type ?? 'identifie',
-                    'is_anonymous' => $report->type === 'anonyme',
-                    'name' => $report->name ?? 'Anonyme',
-                    'email' => $report->email ?? '',
-                    'phone' => $report->phone ?? '',
-                    'files' => $filesArray,
-                    'has_proof' => $hasProof, // ✅ AJOUT DU CHAMP HAS_PROOF
-                    'workflow' => $workflowData,
-                    'created_at' => $report->created_at->toISOString(),
-                    'updated_at' => $report->updated_at->toISOString()
-                ];
-            });
-
+        if ($reports->isEmpty()) {
             return response()->json([
                 'success' => true,
-                'message' => 'Rapports récupérés avec succès',
-                'data' => $formattedReports,
-                'count' => $reports->count()
-            ], 200, [], JSON_UNESCAPED_UNICODE);
+                'message' => 'Aucun rapport trouvé',
+                'data' => [],
+                'count' => 0
+            ], 200);
+        }
 
-        } catch (\Exception $e) {
+        // Formater les données
+        $formattedReports = $reports->map(function ($report) {
+            // ✅ CORRECTION : GESTION SÉCURISÉE DES DATES
+            $createdAt = $report->created_at ? $report->created_at->toISOString() : now()->toISOString();
+            $updatedAt = $report->updated_at ? $report->updated_at->toISOString() : now()->toISOString();
+
+            // Workflow depuis la base de données
+            $workflowData = [
+                'drse' => [
+                    'date' => $createdAt, // ✅ UTILISER LA VARIABLE CORRIGÉE
+                    'status' => 'in_progress',
+                    'progress' => 33,
+                    'agent' => 'DAAQ / DRSE'
+                ],
+                'cac' => [
+                    'date' => null,
+                    'status' => 'pending',
+                    'progress' => 0,
+                    'agent' => 'DAAQ / CAC / DAJ'
+                ],
+                'bianco' => [
+                    'date' => null,
+                    'status' => 'pending',
+                    'progress' => 0,
+                    'agent' => 'DAAQ / BIANCO'
+                ]
+            ];
+
+            // Utiliser le workflow de la base s'il existe
+            if (!empty($report->workflow)) {
+                if (is_array($report->workflow)) {
+                    $workflowData = $report->workflow;
+                } elseif (is_string($report->workflow)) {
+                    $decoded = json_decode($report->workflow, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $workflowData = $decoded;
+                    }
+                }
+            }
+
+            // Gestion des fichiers
+            $filesArray = [];
+            if (!empty($report->files)) {
+                if (is_string($report->files)) {
+                    $decodedFiles = json_decode($report->files, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $filesArray = $decodedFiles;
+                    }
+                } elseif (is_array($report->files)) {
+                    $filesArray = $report->files;
+                }
+            }
+
+            // Gérer les signalements sans preuves
+            $hasProof = $report->has_proof ?? (count($filesArray) > 0);
+
+            return [
+                'id' => $report->id,
+                'reference' => $report->reference ?? 'REF-' . $report->id,
+                'title' => $report->title ?? 'Sans titre',
+                'description' => $report->description ?? 'Aucune description',
+                'category' => $report->category ?? 'divers',
+                'status' => $report->status ?? 'traitement_classification',
+                'type' => $report->type ?? 'identifie',
+                'is_anonymous' => $report->type === 'anonyme',
+                'name' => $report->name ?? 'Anonyme',
+                'email' => $report->email ?? '',
+                'phone' => $report->phone ?? '',
+                'files' => $filesArray,
+                'has_proof' => $hasProof,
+                'workflow' => $workflowData,
+                'created_at' => $createdAt, // ✅ UTILISER LA VARIABLE CORRIGÉE
+                'updated_at' => $updatedAt, // ✅ UTILISER LA VARIABLE CORRIGÉE
+                'region' => $report->region ?? '',
+                'city' => $report->city ?? '',
+                'province' => $report->province ?? ''
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rapports récupérés avec succès',
+            'data' => $formattedReports,
+            'count' => $reports->count()
+        ], 200, [], JSON_UNESCAPED_SLASHES);
+
+    } catch (\Exception $e) {
+        if (class_exists('App\Services\AuditLogger')) {
             AuditLogger::logSystemAction(
                 'Système',
                 'Consultation',
@@ -343,17 +656,18 @@ public function store(Request $request)
                 'Échec',
                 "Erreur lors de la récupération des rapports: " . $e->getMessage()
             );
-
-            Log::error('Error in reports API: ' . $e->getMessage(), ['exception' => $e]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la récupération des rapports',
-                'error' => $e->getMessage(),
-                'data' => []
-            ], 500);
         }
+
+        Log::error('Error in reports API: ' . $e->getMessage(), ['exception' => $e]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la récupération des rapports',
+            'error' => $e->getMessage(),
+            'data' => []
+        ], 500);
     }
+}
 
     /**
      * Afficher un signalement spécifique
@@ -719,161 +1033,339 @@ public function store(Request $request)
         }
     }
 
-    /**
-     * Mettre à jour le statut d'un signalement
-     */
-    public function updateStatus(Request $request, $id): JsonResponse
-    {
-        $validator = Validator::make($request->all(), [
-            'status' => 'required|in:en_cours,finalise,doublon,refuse,classifier',
-            'workflow' => 'nullable|array'
-        ]);
+/**
+ * Mettre à jour le statut d'un signalement avec workflow
+ */
+public function updateStatus(Request $request, $id): JsonResponse
+{
+    $validator = Validator::make($request->all(), [
+        'status' => 'required|in:traitement_classification,investigation,transmis_autorite,refuse,classifier', // ✅ AJOUTER LES STATUTS MANQUANTS
+        'notes' => 'nullable|string|max:500'
+    ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $userEmail = auth()->check() ? auth()->user()->email : 'Système';
+        $report = Report::findOrFail($id);
+
+        $oldStatus = $report->status;
+        $newStatus = $request->status;
+
+        Log::info("🚀 Mise à jour statut - Report: {$report->reference}, Ancien: {$oldStatus}, Nouveau: {$newStatus}");
+
+        // ✅ WORKFLOW CORRECT POUR CHAQUE STATUT
+        $workflow = [];
+
+        switch ($newStatus) {
+            case 'traitement_classification':
+                $workflow = [
+                    'drse' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 33,
+                        'agent' => 'DAAQ / DRSE'
+                    ],
+                    'cac' => [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ],
+                    'bianco' => [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ]
+                ];
+                break;
+
+            case 'investigation':
+                $workflow = [
+                    'drse' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ],
+                    'cac' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 66,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ],
+                    'bianco' => [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ]
+                ];
+                break;
+
+            case 'transmis_autorite':
+                $workflow = [
+                    'drse' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ],
+                    'cac' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ],
+                    'bianco' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 66,
+                        'agent' => 'DAAQ / BIANCO'
+                    ]
+                ];
+                break;
+
+            case 'classifier':
+                $workflow = [
+                    'drse' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ],
+                    'cac' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ],
+                    'bianco' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / BIANCO'
+                    ]
+                ];
+                break;
+
+            case 'refuse':
+                $workflow = [
+                    'drse' => [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'rejected',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / DRSE'
+                    ],
+                    'cac' => [
+                        'date' => null,
+                        'status' => 'not_required',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ],
+                    'bianco' => [
+                        'date' => null,
+                        'status' => 'not_required',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ]
+                ];
+                break;
         }
 
-        try {
-            $userEmail = auth()->check() ? auth()->user()->email : 'Système';
-            $report = Report::findOrFail($id);
+        Log::info("🔄 Nouveau workflow pour {$newStatus}:", $workflow);
 
-            $oldStatus = $report->status;
-            $updateData = ['status' => $request->status];
+        // ✅ SAUVEGARDER LE STATUT ET LE WORKFLOW
+        $report->update([
+            'status' => $newStatus,
+            'workflow' => $workflow
+        ]);
 
-            // Mettre à jour le workflow si fourni
-            if ($request->has('workflow')) {
-                $updateData['workflow'] = $request->workflow;
-            }
+        Log::info("✅ Workflow sauvegardé dans la base");
 
-            $report->update($updateData);
+        // ✅ METTRE À JOUR LE TRACKING
+        if ($report->tracking) {
+            $report->tracking->update([
+                'status' => $newStatus,
+                'last_update' => now(),
+                'notes' => $request->notes
+            ]);
+            Log::info("✅ Tracking mis à jour");
+        } else {
+            Tracking::create([
+                'reference' => $report->reference,
+                'status' => $newStatus,
+                'last_update' => now(),
+                'notes' => $request->notes
+            ]);
+            Log::info("✅ Tracking créé");
+        }
 
-            // Mettre à jour le tracking
-            if ($report->tracking) {
-                $report->tracking->update([
-                    'status' => $request->status,
-                    'last_update' => now()
-                ]);
-            }
-
-            // Journaliser le changement de statut
+        // ✅ JOURNALISATION
+        if (class_exists('App\Services\AuditLogger')) {
             AuditLogger::logModification(
                 $userEmail,
                 'Signalement',
-                "Changement de statut: {$oldStatus} → {$request->status}",
+                "Changement de statut: {$oldStatus} → {$newStatus}",
                 $report->reference
             );
-
-            // Créer une notification pour les changements importants
-            if (in_array($request->status, ['finalise', 'refuse', 'classifier'])) {
-                NotificationService::createNotification([
-                    'type' => 'statut_modifie',
-                    'titre' => 'Statut du signalement mis à jour',
-                    'message' => "Le statut du signalement {$report->reference} a été changé en: " .
-                        $this->getStatusLabel($request->status),
-                    'priority' => 'medium',
-                    'reference_dossier' => $report->reference,
-                    'metadata' => [
-                        'ancien_statut' => $oldStatus,
-                        'nouveau_statut' => $request->status
-                    ]
-                ]);
-            }
-
-            Log::info("Statut du signalement {$report->reference} changé de {$oldStatus} à {$request->status}");
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Statut mis à jour avec succès'
-            ]);
-
-        } catch (\Exception $e) {
-            AuditLogger::logSystemAction(
-                'Système',
-                'Modification',
-                'Signalement',
-                'Échec',
-                "Erreur lors de la mise à jour du statut: " . $e->getMessage(),
-                $id
-            );
-
-            Log::error("Erreur updateStatus: " . $e->getMessage());
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la mise à jour du statut'
-            ], 500);
         }
-    }
 
-    /**
-     * Mettre à jour le workflow d'un signalement
-     */
-    public function updateWorkflow(Request $request, $id): JsonResponse
-    {
-        $validator = Validator::make($request->all(), [
-            'step' => 'required|in:drse,cac,bianco',
-            'status' => 'required|in:pending,in_progress,completed,rejected,duplicate,not_required',
-            'agent' => 'nullable|string|max:255',
-            'notes' => 'nullable|string'
+        Log::info("🎯 Statut du signalement {$report->reference} changé de {$oldStatus} à {$newStatus}");
+
+        // ✅ RÉPONSE AVEC WORKFLOW POUR DEBUG
+        return response()->json([
+            'success' => true,
+            'message' => 'Statut mis à jour avec succès',
+            'data' => [
+                'reference' => $report->reference,
+                'old_status' => $oldStatus,
+                'new_status' => $newStatus,
+                'workflow' => $workflow,
+                'workflow_saved' => $report->fresh()->workflow
+            ]
+        ], 200, [], JSON_UNESCAPED_SLASHES);
+
+    } catch (\Exception $e) {
+        Log::error("💥 Erreur updateStatus: " . $e->getMessage());
+        Log::error("Stack trace: " . $e->getTraceAsString());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la mise à jour du statut: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Helper pour obtenir le label du statut
+ */
+private function getStatusLabel(string $status): string
+{
+    $labels = [
+        'traitement_classification' => 'Traitement et Classification',
+        'investigation' => 'Investigation',
+        'transmis_autorite' => 'Transmis aux autorités compétentes',
+        'refuse' => 'Refusé',
+        'classifier' => 'Classifié'
+    ];
+
+    return $labels[$status] ?? $status;
+}
+
+/**
+ * Récupérer le workflow d'un signalement
+ */
+public function getWorkflow($id): JsonResponse
+{
+    try {
+        $report = Report::findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'workflow' => $report->workflow,
+                'workflow_logs' => $report->workflowLogs,
+                'status' => $report->status
+            ]
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la récupération du workflow'
+        ], 500);
+    }
+}
+    /**
+ * Mettre à jour une étape spécifique du workflow
+ */
+public function updateWorkflowStep(Request $request, $id): JsonResponse
+{
+    $validator = Validator::make($request->all(), [
+        'step' => 'required|in:drse,cac,bianco',
+        'status' => 'required|in:pending,in_progress,completed,rejected,duplicate,not_required',
+        'progress' => 'nullable|integer|min:0|max:100',
+        'notes' => 'nullable|string|max:500'
+    ]);
 
-        try {
-            $userEmail = auth()->check() ? auth()->user()->email : 'Système';
-            $report = Report::findOrFail($id);
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'errors' => $validator->errors()
+        ], 422);
+    }
 
-            $workflowLog = $report->workflowLogs()
-                ->where('step', $request->step)
-                ->firstOrFail();
+    try {
+        $userEmail = auth()->check() ? auth()->user()->email : 'Système';
+        $report = Report::findOrFail($id);
 
-            $oldStatus = $workflowLog->status;
+        $workflow = $report->workflow ?? [];
+        
+        // Mettre à jour l'étape spécifique
+        $workflow[$request->step] = [
+            'date' => $request->status !== 'pending' ? now()->toDateTimeString() : null,
+            'status' => $request->status,
+            'progress' => $request->progress ?? $workflow[$request->step]['progress'] ?? 0,
+            'agent' => $workflow[$request->step]['agent'] ?? 'DAAQ / ' . strtoupper($request->step)
+        ];
 
-            $workflowLog->update([
+        // Mettre à jour le rapport
+        $report->update(['workflow' => $workflow]);
+
+        // Mettre à jour le WorkflowLog
+        $log = $report->workflowLogs()->where('step', strtoupper($request->step))->first();
+        
+        if ($log) {
+            $log->update([
                 'status' => $request->status,
-                'agent' => $request->agent,
+                'processed_at' => $request->status !== 'pending' ? now() : null,
+                'notes' => $request->notes
+            ]);
+        } else {
+            WorkflowLog::create([
+                'report_id' => $report->id,
+                'step' => strtoupper($request->step),
+                'status' => $request->status,
+                'agent' => $workflow[$request->step]['agent'],
                 'notes' => $request->notes,
                 'processed_at' => $request->status !== 'pending' ? now() : null
             ]);
-
-            $report->updateWorkflowSummary();
-
-            AuditLogger::logModification(
-                $userEmail,
-                'Workflow Signalement',
-                "Étape {$request->step} changée: {$oldStatus} → {$request->status}",
-                $report->reference
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Workflow mis à jour avec succès'
-            ]);
-
-        } catch (\Exception $e) {
-            AuditLogger::logSystemAction(
-                'Système',
-                'Modification',
-                'Workflow Signalement',
-                'Échec',
-                "Erreur lors de la mise à jour du workflow: " . $e->getMessage(),
-                $id
-            );
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la mise à jour du workflow'
-            ], 500);
         }
+
+        AuditLogger::logModification(
+            $userEmail,
+            'Workflow Signalement',
+            "Étape {$request->step} mise à jour: {$request->status}",
+            $report->reference
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Étape du workflow mise à jour avec succès',
+            'data' => [
+                'step' => $request->step,
+                'status' => $request->status,
+                'progress' => $request->progress,
+                'workflow' => $workflow
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error("Erreur updateWorkflowStep: " . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la mise à jour de l\'étape du workflow'
+        ], 500);
     }
+}
 
     /**
      * Vérifier le suivi d'un signalement (tracking public)
@@ -999,20 +1491,141 @@ public function store(Request $request)
             ], 500);
         }
     }
+// Dans Report.php, ajouter après la section Relations
+
+public function assignedUser()
+{
+    return $this->belongsTo(User::class, 'assigned_to');
+}
+
+// Ajouter dans $fillable
+protected $fillable = [
+    // ... existants
+    'assigned_to',
+];
 
     /**
-     * Helper pour obtenir le label du statut
+     * ✅ Récupérer les dossiers assignés à un investigateur
      */
-    private function getStatusLabel(string $status): string
-    {
-        $labels = [
-            'en_cours' => 'En cours',
-            'finalise' => 'Finalisé',
-            'doublon' => 'Doublon',
-            'refuse' => 'Refusé',
-            'classifier' => 'Classifié'
+// ReportController.php
+public function getAssignedReports(Request $request)
+{
+    try {
+        $user = $request->user();
+        
+        // Récupérer les rapports assignés à l'utilisateur connecté
+        $reports = Report::where('assigned_to', $user->id)
+            ->with(['category', 'assignedUser'])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        // Calculer les statistiques
+        $stats = [
+            'dossiersAssignes' => $reports->count(),
+            'soumisBianco' => $reports->where('status', 'finalise')->count(),
+            'enquetesCompletees' => $reports->where('status', 'classifier')->count(),
+            'totalDossiers' => $reports->count(),
+            'byCategory' => $reports->groupBy('category')->map->count()
         ];
 
-        return $labels[$status] ?? $status;
+        return response()->json([
+            'success' => true,
+            'data' => $reports,
+            'stats' => $stats
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la récupération des rapports assignés',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
+
+    /**
+     * ✅ Assigner un dossier à un investigateur
+     */
+public function assignInvestigator(Request $request, $id): JsonResponse
+{
+    // Normaliser la valeur avant validation
+    $assignedTo = $request->assigned_to;
+
+    // Si le front envoie "Non assigné", on remplace par NULL
+    if ($assignedTo === "Non assigné" || $assignedTo === "" || $assignedTo === null) {
+        $assignedTo = null;
+    }
+
+    // Validation (null est autorisé)
+    $validator = Validator::make([
+        'assigned_to' => $assignedTo,
+        'reason'      => $request->reason
+    ], [
+        'assigned_to' => 'nullable|integer|exists:team_users,id',
+        'reason'      => 'nullable|string|max:500'
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $report = Report::findOrFail($id);
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Non authentifié'
+            ], 401);
+        }
+
+        $report->update([
+            'assigned_to' => $assignedTo
+        ]);
+
+        \Log::info("Dossier {$report->reference} assigné à : " . ($assignedTo ?? "Aucun"));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Dossier assigné avec succès',
+            'data' => [
+                'reference' => $report->reference,
+                'assigned_to' => $assignedTo,
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        \Log::error('❌ Erreur assignation: ' . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de l\'assignation',
+            'error' => config('app.debug') ? $e->getMessage() : 'Erreur serveur'
+        ], 500);
+    }
+}
+// Ajoutez cette méthode dans ReportController
+private function safeDate($date)
+{
+    if ($date instanceof \Carbon\Carbon) {
+        return $date->toISOString();
+    }
+    
+    if (is_string($date)) {
+        try {
+            return \Carbon\Carbon::parse($date)->toISOString();
+        } catch (\Exception $e) {
+            return now()->toISOString();
+        }
+    }
+    
+    return now()->toISOString();
+}
+
+
+
 }

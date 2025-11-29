@@ -3,7 +3,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\AuditSignalement;
 use App\Models\AuditSysteme;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -12,25 +11,6 @@ class JournalAuditController extends Controller
 {
     public function getJournalData(Request $request): JsonResponse
     {
-        // Récupérer les données d'audit des signalements
-        $auditSignalements = AuditSignalement::orderBy('timestamp', 'desc')
-            ->get()
-            ->map(function ($audit) {
-                return [
-                    'id' => $audit->id,
-                    'timestamp' => $audit->timestamp->format('Y-m-d H:i:s'),
-                    'type_anonymat' => $audit->type_anonymat,
-                    'adresse_ip' => $audit->adresse_ip,
-                    'geolocalisation' => $audit->geolocalisation,
-                    'identite' => $audit->identite,
-                    'telephone' => $audit->telephone,
-                    'email' => $audit->email,
-                    'region_province' => $audit->region_province,
-                    'type_fraude' => $audit->type_fraude,
-                    'statut' => $audit->statut,
-                ];
-            });
-
         // Récupérer les données d'audit système
         $auditSysteme = AuditSysteme::orderBy('timestamp', 'desc')
             ->get()
@@ -50,7 +30,6 @@ class JournalAuditController extends Controller
         return response()->json([
             'success' => true,
             'data' => [
-                'audit_signalements_recus' => $auditSignalements,
                 'audit_log' => $auditSysteme,
             ]
         ]);
@@ -59,14 +38,15 @@ class JournalAuditController extends Controller
     public function exportAudit(Request $request): JsonResponse
     {
         $type = $request->get('type', 'systeme');
-        
         if ($type === 'signalements') {
-            $data = AuditSignalement::all();
-            $fileName = 'audit_signalements_' . date('Y-m-d') . '.csv';
-        } else {
-            $data = AuditSysteme::all();
-            $fileName = 'audit_systeme_' . date('Y-m-d') . '.csv';
+            return response()->json([
+                'success' => false,
+                'message' => 'Audit des signalements supprimé'
+            ], 400);
         }
+
+        $data = AuditSysteme::all();
+        $fileName = 'audit_systeme_' . date('Y-m-d') . '.csv';
 
         // Log de l'export
         AuditLogger::logExport(

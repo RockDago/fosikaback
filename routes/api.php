@@ -82,6 +82,10 @@ Route::prefix('notifications')->group(function () {
 // -------------------------
 Route::middleware(['auth:sanctum'])->group(function () {
     
+    // ==================== ROUTES ASSIGNATION INVESTIGATEURS ✅ ====================
+    Route::get('/reports/assigned', [ReportController::class, 'getAssignedReports']);
+    Route::post('/reports/{id}/assign', [ReportController::class, 'assignInvestigator']);
+
     // ==================== ROUTES ÉQUIPE ====================
     Route::prefix('team')->group(function () {
         // Gestion de l'authentification
@@ -152,6 +156,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // ==================== ROUTES RAPPORTS PROTÉGÉES ====================
     Route::prefix('reports')->group(function () {
+        Route::post('/create', [ReportController::class, 'createReport']);
         Route::post('/generate', [ReportGenerationController::class, 'generateReport']);
         Route::get('/last-generated', [ReportGenerationController::class, 'getLastGeneratedReport']);
         Route::get('/generated', [ReportGenerationController::class, 'getGeneratedReports']);
@@ -162,6 +167,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::put('/{id}/status', [ReportController::class, 'updateStatus']);
         Route::put('/{id}/workflow', [ReportController::class, 'updateWorkflow']);
         Route::post('/{id}/files', [ReportController::class, 'uploadFiles']);
+        Route::put('/{id}', [ReportController::class, 'update']);
+        Route::delete('/{id}', [ReportController::class, 'destroy']);
     });
 
     // ==================== STATISTIQUES ====================
@@ -170,6 +177,29 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // ==================== NOTIFICATIONS PROTÉGÉES ====================
     Route::prefix('notifications')->group(function () {
         Route::get('/unread-count', [NotificationController::class, 'getUnreadCount']);
+        
+        // NOUVELLES ROUTES PAR RÔLE
+        Route::get('/investigator', [NotificationController::class, 'getInvestigatorNotifications']);
+        Route::get('/agent', [NotificationController::class, 'getAgentNotifications']);
+        Route::get('/admin', [NotificationController::class, 'getAdminNotifications']);
+        Route::get('/recent-by-role', [NotificationController::class, 'getRecentByRole']);
+        Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
+        
+        // Routes spécifiques par rôle avec middleware
+        Route::prefix('investigator')->middleware(['check.role:Investigateur'])->group(function () {
+            Route::get('/', [NotificationController::class, 'getInvestigatorNotifications']);
+            Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        });
+        
+        Route::prefix('agent')->middleware(['check.role:Agent'])->group(function () {
+            Route::get('/', [NotificationController::class, 'getAgentNotifications']);
+            Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        });
+        
+        Route::prefix('admin')->middleware(['check.role:Administrateur'])->group(function () {
+            Route::get('/', [NotificationController::class, 'getAdminNotifications']);
+            Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        });
     });
 
     // ==================== JOURNAL D'AUDIT ====================
@@ -179,6 +209,71 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 });
 
+// -------------------------
+// Routes de notifications par rôle (protégées)
+// -------------------------
+Route::middleware(['auth:sanctum'])->prefix('notifications')->group(function () {
+    // Routes générales par rôle
+    Route::get('/role/investigator', [NotificationController::class, 'getInvestigatorNotifications']);
+    Route::get('/role/agent', [NotificationController::class, 'getAgentNotifications']);
+    Route::get('/role/admin', [NotificationController::class, 'getAdminNotifications']);
+    
+    // Route universelle pour notifications récentes par rôle
+    Route::get('/role/recent', [NotificationController::class, 'getRecentByRole']);
+    
+    // Statistiques des notifications par rôle
+    Route::get('/role/stats', [NotificationController::class, 'getNotificationStats']);
+});
+
+// -------------------------
+// Routes spécifiques pour l'investigateur
+// -------------------------
+Route::middleware(['auth:sanctum', 'check.role:Investigateur'])->prefix('investigator')->group(function () {
+    Route::prefix('notifications')->group(function () {
+        Route::get('/', [NotificationController::class, 'getInvestigatorNotifications']);
+        Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
+        Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+        Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
+        Route::delete('/{id}', [NotificationController::class, 'destroy']);
+    });
+});
+
+// -------------------------
+// Routes spécifiques pour l'agent
+// -------------------------
+Route::middleware(['auth:sanctum', 'check.role:Agent'])->prefix('agent')->group(function () {
+    Route::prefix('notifications')->group(function () {
+        Route::get('/', [NotificationController::class, 'getAgentNotifications']);
+        Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
+        Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+        Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
+        Route::delete('/{id}', [NotificationController::class, 'destroy']);
+    });
+});
+
+// -------------------------
+// Routes spécifiques pour l'admin
+// -------------------------
+Route::middleware(['auth:sanctum', 'check.role:Administrateur'])->prefix('admin')->group(function () {
+    Route::prefix('notifications')->group(function () {
+        Route::get('/', [NotificationController::class, 'getAdminNotifications']);
+        Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
+        Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+        Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
+        Route::delete('/{id}', [NotificationController::class, 'destroy']);
+    });
+});
+
+// Routes pour les statuts
+Route::get('/reports/{id}/debug', [ReportController::class, 'getReport']);
+Route::put('/reports/{id}/status', [ReportController::class, 'updateStatus']);
+// Routes pour le workflow
+Route::put('/reports/{id}/status', [ReportController::class, 'updateStatus']);
+Route::put('/reports/{id}/workflow-step', [ReportController::class, 'updateWorkflowStep']);
+Route::get('/reports/{id}/workflow', [ReportController::class, 'getWorkflow']);
 // -------------------------
 // Route fallback
 // -------------------------

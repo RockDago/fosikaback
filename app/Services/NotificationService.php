@@ -31,18 +31,6 @@ class NotificationService
         ]);
     }
 
-    public static function notifyDoublonDetected(string $reference, array $doublons): void
-    {
-        self::createNotification([
-            'type' => 'doublon_detecte',
-            'titre' => 'Doublon détecté',
-            'message' => "Doublon détecté pour le signalement {$reference}",
-            'priority' => 'medium',
-            'reference_dossier' => $reference,
-            'metadata' => ['doublons' => $doublons],
-        ]);
-    }
-
     public static function notifySignalementUrgent(string $reference): void
     {
         self::createNotification([
