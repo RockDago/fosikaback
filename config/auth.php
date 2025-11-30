@@ -1,48 +1,58 @@
 <?php
 
 return [
+
     'defaults' => [
         'guard' => 'web',
-        'passwords' => 'users',
+        'passwords' => 'teams',
     ],
 
     'guards' => [
         'web' => [
             'driver' => 'session',
-            'provider' => 'users',
+            'provider' => 'teams',
         ],
-        
-        // ✅ AJOUT: Guard pour Admin
+
+        // ✅ Guard pour Admin (session)
         'admin' => [
             'driver' => 'session',
             'provider' => 'admins',
         ],
 
-        // ✅ Guard API Sanctum pour tous
+        // ✅ Guard API Sanctum (tokens) pour tous les modèles
+        // Sanctum résout dynamiquement le modèle à partir du token
         'sanctum' => [
             'driver' => 'sanctum',
-            'provider' => null, // Sanctum gère dynamiquement
+            'provider' => null,
+        ],
+
+        // ✅ Guard API dédié aux utilisateurs TeamUser (optionnel mais propre)
+        'team-api' => [
+            'driver' => 'sanctum',
+            'provider' => 'teams',
         ],
     ],
 
     'providers' => [
-        'users' => [
-            'driver' => 'eloquent',
-            'model' => App\Models\User::class,
+        // ✅ Provider principal = TeamUser
+        'teams' => [
+            'driver'  => 'eloquent',
+            'model'   => App\Models\TeamUser::class,
         ],
 
-        // ✅ AJOUT: Provider pour Admin
+        // ✅ Provider pour Admin
         'admins' => [
-            'driver' => 'eloquent',
-            'model' => App\Models\Admin::class,
+            'driver'  => 'eloquent',
+            'model'   => App\Models\Admin::class,
         ],
     ],
 
     'passwords' => [
-        'users' => [
-            'provider' => 'users',
-            'table' => 'password_reset_tokens',
-            'expire' => 60,
+        // ✅ Reset password pour TeamUser
+        'teams' => [
+            'provider' => 'teams',
+            'table'    => 'password_reset_tokens',
+            'expire'   => 60,
             'throttle' => 60,
         ],
     ],

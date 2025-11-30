@@ -66,9 +66,8 @@ Route::post('/admin/login', [AdminAuthController::class, 'login']);
 Route::post('/team/login', [TeamAuthController::class, 'login']);
 
 // -------------------------
-// Routes d’audit système (accessibles côté API)
+// Routes d’audit système (API, admin uniquement)
 // -------------------------
-// Ces routes correspondent à ce que ton JournalView.jsx appelle :
 // GET  /api/journal-audit
 // POST /api/journal-audit/export
 Route::middleware(['auth:sanctum', 'check.role:Admin'])->group(function () {
@@ -84,11 +83,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // ==================== ROUTES PROFIL UNIFIÉES ====================
     Route::prefix('profile')->group(function () {
         Route::get('/', function (Request $request) {
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
                 return response()->json(['error' => 'User not authenticated'], 401);
             }
 
-            $controller = $request->user() instanceof \App\Models\Admin
+            $controller = $user instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
 
@@ -96,11 +96,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
 
         Route::put('/', function (Request $request) {
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
                 return response()->json(['error' => 'User not authenticated'], 401);
             }
 
-            $controller = $request->user() instanceof \App\Models\Admin
+            $controller = $user instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
 
@@ -108,11 +109,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
 
         Route::post('/avatar', function (Request $request) {
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
                 return response()->json(['error' => 'User not authenticated'], 401);
             }
 
-            $controller = $request->user() instanceof \App\Models\Admin
+            $controller = $user instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
 
@@ -120,11 +122,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
 
         Route::delete('/avatar', function (Request $request) {
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
                 return response()->json(['error' => 'User not authenticated'], 401);
             }
 
-            $controller = $request->user() instanceof \App\Models\Admin
+            $controller = $user instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
 
@@ -132,11 +135,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
         });
 
         Route::post('/password', function (Request $request) {
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
                 return response()->json(['error' => 'User not authenticated'], 401);
             }
 
-            $controller = $request->user() instanceof \App\Models\Admin
+            $controller = $user instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
 
@@ -170,6 +174,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
         Route::get('/all', [NotificationController::class, 'index']);
         Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
+        // Si tu veux éviter toute erreur si le front appelle encore cette URL :
+        // Route::get('/recent-by-role', [NotificationController::class, 'getRecentByRole']);
         Route::get('/unread-count', [NotificationController::class, 'getUnreadCount']);
         Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
         Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
@@ -196,11 +202,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Déconnexion / Vérification / Utilisateur courant
     // -------------------------
     Route::post('/logout', function (Request $request) {
-        if (!$request->user()) {
+        $user = $request->user();
+        if (!$user) {
             return response()->json(['error' => 'User not authenticated'], 401);
         }
 
-        $controller = $request->user() instanceof \App\Models\Admin
+        $controller = $user instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
 
@@ -208,11 +215,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 
     Route::get('/check-auth', function (Request $request) {
-        if (!$request->user()) {
+        $user = $request->user();
+        if (!$user) {
             return response()->json(['error' => 'User not authenticated'], 401);
         }
 
-        $controller = $request->user() instanceof \App\Models\Admin
+        $controller = $user instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
 
@@ -220,11 +228,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 
     Route::get('/user', function (Request $request) {
-        if (!$request->user()) {
+        $user = $request->user();
+        if (!$user) {
             return response()->json(['error' => 'User not authenticated'], 401);
         }
 
-        $controller = $request->user() instanceof \App\Models\Admin
+        $controller = $user instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
 
