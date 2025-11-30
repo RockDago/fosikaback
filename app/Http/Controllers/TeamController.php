@@ -117,6 +117,15 @@ class TeamController extends Controller
     public function createUser(Request $request)
     {
         try {
+            // ✅ CORRECTION : Vérification des permissions
+            $currentUser = $request->user();
+            if (!$currentUser || !$currentUser->isAdmin()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent créer des utilisateurs.'
+                ], 403);
+            }
+
             // Préparation des données
             $requestData = $request->all();
             Log::info('📝 createUser - Données reçues (RAW):', $requestData);
@@ -267,6 +276,15 @@ class TeamController extends Controller
     public function updateUser(Request $request, $id)
     {
         try {
+            // ✅ CORRECTION : Vérification des permissions
+            $currentUser = $request->user();
+            if (!$currentUser || !$currentUser->isAdmin()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent modifier des utilisateurs.'
+                ], 403);
+            }
+
             $user = TeamUser::findOrFail($id);
 
             // Préparation des données
@@ -333,6 +351,15 @@ class TeamController extends Controller
     public function deleteUser($id)
     {
         try {
+            // ✅ CORRECTION : Vérification des permissions
+            $currentUser = request()->user();
+            if (!$currentUser || !$currentUser->isAdmin()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent supprimer des utilisateurs.'
+                ], 403);
+            }
+
             $user = TeamUser::findOrFail($id);
             $user->delete();
 
@@ -356,6 +383,15 @@ class TeamController extends Controller
     public function toggleStatus($id)
     {
         try {
+            // ✅ CORRECTION : Vérification des permissions
+            $currentUser = request()->user();
+            if (!$currentUser || !$currentUser->isAdmin()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent modifier les statuts.'
+                ], 403);
+            }
+
             $user = TeamUser::findOrFail($id);
             $user->statut = !$user->statut;
             $user->save();
@@ -381,6 +417,15 @@ class TeamController extends Controller
     public function resetPassword(Request $request, $id)
     {
         try {
+            // ✅ CORRECTION : Vérification des permissions
+            $currentUser = $request->user();
+            if (!$currentUser || !$currentUser->isAdmin()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent réinitialiser les mots de passe.'
+                ], 403);
+            }
+
             $validator = Validator::make($request->all(), [
                 'password' => 'required|string|min:8|confirmed',
             ]);

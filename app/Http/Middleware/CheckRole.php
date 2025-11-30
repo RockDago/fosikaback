@@ -30,6 +30,15 @@ class CheckRole
             ], 401);
         }
 
+        // ✅ CORRECTION : Support des admins de la table admins
+        // Les utilisateurs de la table admins ont automatiquement le rôle 'Admin'
+        if ($user instanceof \App\Models\Admin) {
+            // Si la route demande le rôle 'Admin', on autorise
+            if (in_array('Admin', $roles)) {
+                return $next($request);
+            }
+        }
+
         // Déterminer le rôle de l'utilisateur selon son type
         $userRole = $this->getUserRole($user);
 
@@ -60,8 +69,9 @@ class CheckRole
             ]);
 
             // Déconnecter l'utilisateur
-            $request->user()->currentAccessToken()->delete();
-            $request->session()->invalidate();
+            if (method_exists($user, 'currentAccessToken')) {
+                $user->currentAccessToken()->delete();
+            }
             
             return response()->json([
                 'success' => false,
@@ -79,17 +89,13 @@ class CheckRole
      */
     private function getUserRole($user): string
     {
+        // ✅ CORRECTION : Les admins de la table admins ont le rôle 'Admin'
         if ($user instanceof \App\Models\Admin) {
-            return 'admin';
-        } elseif ($user instanceof \App\Models\TeamUser) {
-            // Vérifier si la relation role existe
-            if ($user->relationLoaded('role')) {
-                return $user->role->name; // 'agent' ou 'investigator'
-            } else {
-                // Charger la relation si elle n'est pas déjà chargée
-                $user->load('role');
-                return $user->role->name;
-            }
+            return 'Admin';
+        } 
+        // Pour les TeamUser, utiliser le champ role directement
+        elseif ($user instanceof \App\Models\TeamUser) {
+            return $user->role; // Retourne 'Admin', 'Agent', 'Investigateur'
         }
 
         return 'unknown';

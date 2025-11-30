@@ -23,16 +23,16 @@ use App\Http\Controllers\JournalAuditController;
 // -------------------------
 Route::get('/', function () {
     return response()->json([
-        'message' => 'FOSIKA API is running',
-        'version' => '1.0.0',
-        'timestamp' => now()
+        'message'   => 'FOSIKA API is running',
+        'version'   => '1.0.0',
+        'timestamp' => now(),
     ]);
 });
 
 Route::get('/health', function () {
     return response()->json([
-        'status' => 'healthy',
-        'timestamp' => now()
+        'status'    => 'healthy',
+        'timestamp' => now(),
     ]);
 });
 
@@ -66,6 +66,17 @@ Route::post('/admin/login', [AdminAuthController::class, 'login']);
 Route::post('/team/login', [TeamAuthController::class, 'login']);
 
 // -------------------------
+// Routes d’audit système (accessibles côté API)
+// -------------------------
+// Ces routes correspondent à ce que ton JournalView.jsx appelle :
+// GET  /api/journal-audit
+// POST /api/journal-audit/export
+Route::middleware(['auth:sanctum', 'check.role:Admin'])->group(function () {
+    Route::get('/journal-audit', [JournalAuditController::class, 'getJournalData']);
+    Route::post('/journal-audit/export', [JournalAuditController::class, 'exportAudit']);
+});
+
+// -------------------------
 // Routes protégées par Sanctum
 // -------------------------
 Route::middleware(['auth:sanctum'])->group(function () {
@@ -73,47 +84,67 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // ==================== ROUTES PROFIL UNIFIÉES ====================
     Route::prefix('profile')->group(function () {
         Route::get('/', function (Request $request) {
-            if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+            if (!$request->user()) {
+                return response()->json(['error' => 'User not authenticated'], 401);
+            }
+
             $controller = $request->user() instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
+
             return $controller->getProfile($request);
         });
 
         Route::put('/', function (Request $request) {
-            if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+            if (!$request->user()) {
+                return response()->json(['error' => 'User not authenticated'], 401);
+            }
+
             $controller = $request->user() instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
+
             return $controller->updateProfile($request);
         });
 
         Route::post('/avatar', function (Request $request) {
-            if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+            if (!$request->user()) {
+                return response()->json(['error' => 'User not authenticated'], 401);
+            }
+
             $controller = $request->user() instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
+
             return $controller->updateAvatar($request);
         });
 
         Route::delete('/avatar', function (Request $request) {
-            if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+            if (!$request->user()) {
+                return response()->json(['error' => 'User not authenticated'], 401);
+            }
+
             $controller = $request->user() instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
+
             return $controller->deleteAvatar($request);
         });
 
         Route::post('/password', function (Request $request) {
-            if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+            if (!$request->user()) {
+                return response()->json(['error' => 'User not authenticated'], 401);
+            }
+
             $controller = $request->user() instanceof \App\Models\Admin
                 ? app(AdminProfileController::class)
                 : app(TeamProfileController::class);
+
             return $controller->updatePassword($request);
         });
     });
 
-    // ✅ ROUTES ADMIN PROFILE - IMPORTANT: Doivent être définies
+    // ✅ ROUTES ADMIN PROFILE
     Route::get('/admin/profile', [AdminProfileController::class, 'getProfile']);
     Route::put('/admin/profile', [AdminProfileController::class, 'updateProfile']);
     Route::post('/admin/profile/avatar', [AdminProfileController::class, 'updateAvatar']);
@@ -127,12 +158,17 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::delete('/team/profile/avatar', [TeamProfileController::class, 'deleteAvatar']);
     Route::post('/team/profile/password', [TeamProfileController::class, 'updatePassword']);
 
+    // ✅ ALIAS POUR COMPATIBILITÉ FRONTEND
+    Route::get('/agent/profile', [TeamProfileController::class, 'getProfile']);
+    Route::get('/investigateur/profile', [TeamProfileController::class, 'getProfile']);
+    Route::get('/investigator/profile', [TeamProfileController::class, 'getProfile']);
+
     // -------------------------
     // Notifications
     // -------------------------
     Route::prefix('notifications')->group(function () {
         Route::get('/', [NotificationController::class, 'index']);
-        Route::get('/all', [NotificationController::class, 'index']); // ✅ AJOUT DE CETTE ROUTE
+        Route::get('/all', [NotificationController::class, 'index']);
         Route::get('/recent', [NotificationController::class, 'getRecentByRole']);
         Route::get('/unread-count', [NotificationController::class, 'getUnreadCount']);
         Route::get('/stats', [NotificationController::class, 'getNotificationStats']);
@@ -149,32 +185,49 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('/investigateurs', [TeamController::class, 'getInvestigateurs']);
         Route::get('/administrateurs', [TeamController::class, 'getAdministrateurs']);
         Route::get('/stats', [TeamController::class, 'getStats']);
+        Route::get('/roles', [TeamController::class, 'getRoles']);
+
+        // ✅ RESET-PASSWORD DIRECT
+        Route::post('/users/{id}/reset-password', [TeamController::class, 'resetPassword']);
+        Route::put('/users/{id}/reset-password', [TeamController::class, 'resetPassword']);
     });
 
     // -------------------------
     // Déconnexion / Vérification / Utilisateur courant
     // -------------------------
     Route::post('/logout', function (Request $request) {
-        if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+        if (!$request->user()) {
+            return response()->json(['error' => 'User not authenticated'], 401);
+        }
+
         $controller = $request->user() instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
+
         return $controller->logout($request);
     });
 
     Route::get('/check-auth', function (Request $request) {
-        if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+        if (!$request->user()) {
+            return response()->json(['error' => 'User not authenticated'], 401);
+        }
+
         $controller = $request->user() instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
+
         return $controller->checkAuth($request);
     });
 
     Route::get('/user', function (Request $request) {
-        if (!$request->user()) return response()->json(['error' => 'User not authenticated'], 401);
+        if (!$request->user()) {
+            return response()->json(['error' => 'User not authenticated'], 401);
+        }
+
         $controller = $request->user() instanceof \App\Models\Admin
             ? app(AdminAuthController::class)
             : app(TeamAuthController::class);
+
         return $controller->user($request);
     });
 
@@ -182,45 +235,44 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/admin/check', function (Request $request) {
         try {
             $admin = $request->user();
-            
+
             if (!$admin) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Non authentifié'
+                    'message' => 'Non authentifié',
                 ], 401);
             }
 
             if (!($admin instanceof \App\Models\Admin)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Non autorisé - Accès réservé aux administrateurs'
+                    'message' => 'Non autorisé - Accès réservé aux administrateurs',
                 ], 403);
             }
 
             $responseData = [
-                'id' => $admin->id ?? null,
-                'name' => $admin->name ?? '',
-                'email' => $admin->email ?? '',
+                'id'         => $admin->id ?? null,
+                'name'       => $admin->name ?? '',
+                'email'      => $admin->email ?? '',
                 'first_name' => $admin->first_name ?? '',
-                'last_name' => $admin->last_name ?? '',
+                'last_name'  => $admin->last_name ?? '',
             ];
 
             return response()->json([
                 'success' => true,
                 'message' => 'Token valide',
-                'data' => $responseData
+                'data'    => $responseData,
             ]);
-
         } catch (\Exception $e) {
             \Log::error('Erreur /admin/check:', [
                 'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'trace'   => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur interne du serveur',
-                'debug' => config('app.debug') ? $e->getMessage() : null
+                'debug'   => config('app.debug') ? $e->getMessage() : null,
             ], 500);
         }
     });
@@ -234,6 +286,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
             Route::delete('/users/{id}', [TeamController::class, 'deleteUser']);
             Route::post('/users/{id}/toggle-status', [TeamController::class, 'toggleStatus']);
             Route::post('/users/{id}/reset-password', [TeamController::class, 'resetPassword']);
+            Route::put('/users/{id}/reset-password', [TeamController::class, 'resetPassword']);
         });
 
         Route::prefix('audit')->group(function () {
@@ -245,14 +298,16 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Agent
     Route::middleware(['check.role:Agent'])->prefix('agent')->group(function () {
         Route::get('/profile/stats', [TeamProfileController::class, 'getPersonalStats']);
+
         Route::prefix('reports')->group(function () {
             Route::get('/assigned', [ReportController::class, 'getAssignedReports']);
         });
     });
 
-    // Investigateur / Investigator (alias pour compatibilité)
+    // Investigateur / Investigator
     Route::middleware(['check.role:Investigateur'])->prefix('investigator')->group(function () {
         Route::get('/profile/stats', [TeamProfileController::class, 'getPersonalStats']);
+
         Route::prefix('reports')->group(function () {
             Route::get('/assigned', [ReportController::class, 'getAssignedReports']);
         });
@@ -260,6 +315,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     Route::middleware(['check.role:Investigateur'])->prefix('investigateur')->group(function () {
         Route::get('/profile/stats', [TeamProfileController::class, 'getPersonalStats']);
+
         Route::prefix('reports')->group(function () {
             Route::get('/assigned', [ReportController::class, 'getAssignedReports']);
         });
@@ -305,6 +361,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
 Route::fallback(function () {
     return response()->json([
         'success' => false,
-        'message' => 'Endpoint not found'
+        'message' => 'Endpoint not found',
     ], 404);
 });
