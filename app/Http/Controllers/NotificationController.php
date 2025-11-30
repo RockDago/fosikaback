@@ -1,389 +1,341 @@
 <?php
-// app/Http/Controllers/NotificationController.php
 
 namespace App\Http\Controllers;
 
 use App\Models\Notification;
 use Illuminate\Http\Request;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class NotificationController extends Controller
 {
-    public function index(Request $request): JsonResponse
-    {
-        $notifications = Notification::active()
-            ->orderBy('created_at', 'desc')
-            ->get()
-            ->map(function ($notification) {
-                return [
-                    'id' => $notification->id,
-                    'type' => $notification->type,
-                    'titre' => $notification->titre,
-                    'message' => $notification->message,
-                    'priority' => $notification->priority,
-                    'status' => $notification->status,
-                    'reference_dossier' => $notification->reference_dossier,
-                    'timestamp' => $notification->created_at->format('d/m/Y H:i'),
-                ];
-            });
-
-        return response()->json([
-            'success' => true,
-            'data' => $notifications
-        ]);
-    }
-
-    public function markAsRead($id): JsonResponse
-    {
-        $notification = Notification::findOrFail($id);
-        $notification->markAsRead();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Notification marquée comme lue'
-        ]);
-    }
-
-    public function markAllAsRead(): JsonResponse
-    {
-        Notification::active()->update([
-            'read_at' => now(),
-            'status' => 'read'
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Toutes les notifications marquées comme lues'
-        ]);
-    }
-
-    public function getUnreadCount(): JsonResponse
-    {
-        $count = Notification::active()->count();
-
-        return response()->json([
-            'success' => true,
-            'data' => ['unread_count' => $count]
-        ]);
-    }
-
-    public function destroy($id)
+    /**
+     * Récupérer toutes les notifications de l'utilisateur connecté
+     */
+    public function index(Request $request)
     {
         try {
-            $notification = Notification::findOrFail($id);
-            $notification->delete();
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Notification supprimée avec succès'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la suppression'
-            ], 500);
-        }
-    }
-
-    public function deleteRead()
-    {
-        try {
-            Notification::where('status', 'read')->delete();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Notifications lues supprimées avec succès'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la suppression'
-            ], 500);
-        }
-    }
-
-    // Toutes les notifications (pour l'historique)
-    public function getAll()
-    {
-        try {
+            // Récupérer TOUTES les notifications sans filtre
+            // Temporairement pour debug
             $notifications = Notification::orderBy('created_at', 'desc')->get();
 
             return response()->json([
                 'success' => true,
-                'data' => $notifications
+                'data' => $notifications,
+                'count' => $notifications->count(),
+                'user_type' => get_class($user),
+                'user_id' => $user->id
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::index', [
+                'message' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+                'trace' => $e->getTraceAsString()
             ]);
-        } catch (\Exception $e) {
+
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors du chargement des notifications'
+                'message' => 'Erreur lors du chargement des notifications',
+                'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => basename($e->getFile())
             ], 500);
         }
     }
 
-    // Notifications récentes (pour le header)
-    public function getRecent()
+    /**
+     * Récupérer les notifications récentes
+     */
+    public function getRecentByRole(Request $request)
     {
         try {
-            // Récupérer les 20 dernières notifications (récentes + non lues)
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
             $notifications = Notification::orderBy('created_at', 'desc')
-                ->limit(20)
+                ->limit(10)
                 ->get();
 
             return response()->json([
                 'success' => true,
                 'data' => $notifications
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::getRecentByRole', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-        } catch (\Exception $e) {
+
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors du chargement des notifications récentes'
+                'message' => 'Erreur lors du chargement des notifications',
+                'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Récupérer les notifications pour l'investigateur
+     * Récupérer le nombre de notifications non lues
      */
-    public function getInvestigatorNotifications(Request $request): JsonResponse
+    public function getUnreadCount(Request $request)
     {
         try {
-            // Types de notifications spécifiques aux investigateurs
-            $investigatorTypes = [
-                'nouveau_signalement',
-                'signalement_urgent', 
-                'doublon_detecte',
-                'statut_modifie',
-                'enquete_assignee',
-                'enquete_terminee'
-            ];
-
-            $notifications = Notification::whereIn('type', $investigatorTypes)
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($notification) {
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'titre' => $notification->titre,
-                        'message' => $notification->message,
-                        'priority' => $notification->priority,
-                        'status' => $notification->status,
-                        'reference_dossier' => $notification->reference_dossier,
-                        'metadata' => $notification->metadata,
-                        'created_at' => $notification->created_at->toISOString(),
-                        'read_at' => $notification->read_at?->toISOString(),
-                    ];
-                });
-
-            return response()->json([
-                'success' => true,
-                'data' => $notifications
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors du chargement des notifications de l\'investigateur'
-            ], 500);
-        }
-    }
-
-    /**
-     * Notifications récentes pour le header (par rôle)
-     */
-    public function getRecentByRole(Request $request): JsonResponse
-    {
-        try {
-            $user = Auth::user();
+            $user = $request->user();
             
-            // Si l'utilisateur n'est pas authentifié, retourner les notifications générales
             if (!$user) {
-                return $this->getRecent();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
             }
 
-            // Définir les types de notifications par rôle
-            $roleBasedTypes = [
-                'admin' => [
-                    'nouveau_signalement',
-                    'signalement_urgent',
-                    'doublon_detecte', 
-                    'statut_modifie',
-                    'system'
-                ],
-                'agent' => [
-                    'nouveau_signalement',
-                    'signalement_urgent',
-                    'doublon_detecte',
-                    'statut_modifie'
-                ],
-                'investigateur' => [
-                    'nouveau_signalement',
-                    'signalement_urgent',
-                    'doublon_detecte',
-                    'statut_modifie',
-                    'enquete_assignee',
-                    'enquete_terminee'
-                ]
-            ];
+            $count = Notification::where('status', 'active')->count();
 
-            // Récupérer le rôle de l'utilisateur (adaptez selon votre structure)
-            $userRole = $user->role ?? 'investigateur'; // Par défaut investigateur
+            return response()->json([
+                'success' => true,
+                'count' => $count
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::getUnreadCount', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors du comptage',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtenir les statistiques des notifications
+     */
+    public function getNotificationStats(Request $request)
+    {
+        try {
+            $user = $request->user();
             
-            $types = $roleBasedTypes[$userRole] ?? $roleBasedTypes['investigateur'];
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
 
-            $notifications = Notification::whereIn('type', $types)
-                ->orderBy('created_at', 'desc')
-                ->limit(20)
-                ->get()
-                ->map(function ($notification) {
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'titre' => $notification->titre,
-                        'message' => $notification->message,
-                        'priority' => $notification->priority,
-                        'status' => $notification->status,
-                        'reference_dossier' => $notification->reference_dossier,
-                        'metadata' => $notification->metadata,
-                        'created_at' => $notification->created_at->toISOString(),
-                        'read_at' => $notification->read_at?->toISOString(),
-                    ];
-                });
-
-            return response()->json([
-                'success' => true,
-                'data' => $notifications
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors du chargement des notifications récentes par rôle'
-            ], 500);
-        }
-    }
-
-    /**
-     * Notifications pour l'agent
-     */
-    public function getAgentNotifications(Request $request): JsonResponse
-    {
-        try {
-            $agentTypes = [
-                'nouveau_signalement',
-                'signalement_urgent',
-                'doublon_detecte',
-                'statut_modifie'
-            ];
-
-            $notifications = Notification::whereIn('type', $agentTypes)
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($notification) {
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'titre' => $notification->titre,
-                        'message' => $notification->message,
-                        'priority' => $notification->priority,
-                        'status' => $notification->status,
-                        'reference_dossier' => $notification->reference_dossier,
-                        'metadata' => $notification->metadata,
-                        'created_at' => $notification->created_at->toISOString(),
-                        'read_at' => $notification->read_at?->toISOString(),
-                    ];
-                });
-
-            return response()->json([
-                'success' => true,
-                'data' => $notifications
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors du chargement des notifications de l\'agent'
-            ], 500);
-        }
-    }
-
-    /**
-     * Notifications pour l'administrateur
-     */
-    public function getAdminNotifications(Request $request): JsonResponse
-    {
-        try {
-            $adminTypes = [
-                'nouveau_signalement',
-                'signalement_urgent',
-                'doublon_detecte', 
-                'statut_modifie',
-                'system',
-                'user_activity'
-            ];
-
-            $notifications = Notification::whereIn('type', $adminTypes)
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->map(function ($notification) {
-                    return [
-                        'id' => $notification->id,
-                        'type' => $notification->type,
-                        'titre' => $notification->titre,
-                        'message' => $notification->message,
-                        'priority' => $notification->priority,
-                        'status' => $notification->status,
-                        'reference_dossier' => $notification->reference_dossier,
-                        'metadata' => $notification->metadata,
-                        'created_at' => $notification->created_at->toISOString(),
-                        'read_at' => $notification->read_at?->toISOString(),
-                    ];
-                });
-
-            return response()->json([
-                'success' => true,
-                'data' => $notifications
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors du chargement des notifications de l\'administrateur'
-            ], 500);
-        }
-    }
-
-    /**
-     * Statistiques des notifications par rôle
-     */
-    public function getNotificationStats(Request $request): JsonResponse
-    {
-        try {
-            $user = Auth::user();
-            $userRole = $user->role ?? 'investigateur';
-
-            $roleBasedTypes = [
-                'admin' => ['nouveau_signalement', 'signalement_urgent', 'doublon_detecte', 'statut_modifie', 'system'],
-                'agent' => ['nouveau_signalement', 'signalement_urgent', 'doublon_detecte', 'statut_modifie'],
-                'investigateur' => ['nouveau_signalement', 'signalement_urgent', 'doublon_detecte', 'statut_modifie', 'enquete_assignee', 'enquete_terminee']
-            ];
-
-            $types = $roleBasedTypes[$userRole] ?? $roleBasedTypes['investigateur'];
-
-            $total = Notification::whereIn('type', $types)->count();
-            $unread = Notification::whereIn('type', $types)->active()->count();
-            $read = Notification::whereIn('type', $types)->where('status', 'read')->count();
+            $total = Notification::count();
+            $unread = Notification::where('status', 'active')->count();
+            $read = Notification::where('status', 'read')->count();
 
             return response()->json([
                 'success' => true,
                 'data' => [
                     'total' => $total,
                     'unread' => $unread,
-                    'read' => $read,
-                    'role' => $userRole
+                    'read' => $read
                 ]
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::getNotificationStats', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-        } catch (\Exception $e) {
+
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors du chargement des statistiques'
+                'message' => 'Erreur lors du chargement des statistiques',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Marquer une notification comme lue
+     */
+    public function markAsRead(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            $notification = Notification::find($id);
+
+            if (!$notification) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Notification non trouvée'
+                ], 404);
+            }
+
+            $notification->status = 'read';
+            $notification->read_at = now();
+            $notification->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Notification marquée comme lue',
+                'data' => $notification
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::markAsRead', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la mise à jour',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Marquer toutes les notifications comme lues
+     */
+    public function markAllAsRead(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            $updated = Notification::where('status', 'active')
+                ->update([
+                    'status' => 'read',
+                    'read_at' => now()
+                ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Toutes les notifications ont été marquées comme lues',
+                'count' => $updated
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::markAllAsRead', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la mise à jour',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Supprimer une notification
+     */
+    public function destroy(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            $notification = Notification::find($id);
+
+            if (!$notification) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Notification non trouvée'
+                ], 404);
+            }
+
+            $notification->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Notification supprimée avec succès'
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::destroy', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la suppression',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Supprimer toutes les notifications lues
+     */
+    public function deleteRead(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            $deleted = Notification::where('status', 'read')->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Notifications lues supprimées avec succès',
+                'count' => $deleted
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur NotificationController::deleteRead', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la suppression',
+                'error' => $e->getMessage()
             ], 500);
         }
     }

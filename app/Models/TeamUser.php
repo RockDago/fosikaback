@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
+use Illuminate\Support\Facades\Storage;
 
 class TeamUser extends Authenticatable
 {
@@ -15,8 +16,8 @@ class TeamUser extends Authenticatable
 
     protected $fillable = [
         'nom_complet',
-        'first_name', // AJOUTÉ: champ manquant
-        'last_name',  // AJOUTÉ: champ manquant
+        'first_name',
+        'last_name',
         'email',
         'telephone',
         'adresse',
@@ -27,7 +28,7 @@ class TeamUser extends Authenticatable
         'responsabilites',
         'specialisations',
         'statut',
-        'avatar', // AJOUTÉ: champ manquant pour les avatars
+        'avatar',
         'last_login_at',
         'email_verified_at'
     ];
@@ -44,13 +45,18 @@ class TeamUser extends Authenticatable
         'specialisations' => 'array',
     ];
 
-    // SUPPRIMÉ: La relation role qui causait l'erreur
-    // public function roleRelation()
-    // {
-    //     return $this->belongsTo(Role::class, 'role', 'code');
-    // }
+    // ✅ AJOUT: Attributs calculés pour une meilleure compatibilité
+    protected $appends = [
+        'avatar_url',
+        'full_name',
+        'name',
+        'phone',
+        'telephone_formatted',
+        'specialisations_list',
+        'formatted_role'
+    ];
 
-    // Scopes mis à jour pour utiliser directement la colonne 'role'
+    // Scopes pour les différents rôles
     public function scopeAgents($query)
     {
         return $query->where('role', 'Agent');
@@ -71,16 +77,28 @@ class TeamUser extends Authenticatable
         return $query->where('statut', true);
     }
 
-    // AJOUTÉ: Accesseur pour l'avatar
+    // ✅ CORRIGÉ: Accesseur pour l'avatar - Gestion améliorée
     public function getAvatarUrlAttribute()
     {
-        if ($this->avatar) {
-            return asset('storage/' . $this->avatar);
+        if (!$this->avatar) {
+            return null;
         }
-        return null;
+        
+        // Si c'est déjà une URL complète
+        if (filter_var($this->avatar, FILTER_VALIDATE_URL)) {
+            return $this->avatar;
+        }
+        
+        // Si c'est un chemin de stockage
+        if (str_starts_with($this->avatar, 'avatars/')) {
+            return Storage::disk('public')->url($this->avatar);
+        }
+        
+        // Pour la compatibilité avec asset()
+        return asset('storage/' . $this->avatar);
     }
 
-    // AJOUTÉ: Accesseur pour le nom complet
+    // ✅ Accesseur pour le nom complet
     public function getFullNameAttribute()
     {
         if ($this->first_name && $this->last_name) {
@@ -89,27 +107,62 @@ class TeamUser extends Authenticatable
         return $this->nom_complet;
     }
 
-    // AJOUTÉ: Accesseur pour le nom d'affichage (compatibilité)
+    // ✅ Accesseur pour la compatibilité (utilisé dans le frontend)
     public function getNameAttribute()
     {
         return $this->nom_complet;
     }
 
-    // AJOUTÉ: Accesseur pour le téléphone (compatibilité)
+    // ✅ Accesseur pour la compatibilité (utilisé dans le frontend)
     public function getPhoneAttribute()
     {
         return $this->telephone;
     }
 
-    // Méthodes de vérification des permissions
-    public function hasPermission($permission)
+    // ✅ Accesseur pour le téléphone formaté
+    public function getTelephoneFormattedAttribute()
     {
-        // Pour l'instant, pas de permissions système
-        // Cette méthode sera implémentée plus tard si nécessaire
-        return true;
+        if (!$this->telephone) {
+            return null;
+        }
+        
+        $phone = preg_replace('/\D/', '', $this->telephone);
+        
+        if (strlen($phone) === 10 && str_starts_with($phone, '0')) {
+            return preg_replace('/(\d{2})(\d{2})(\d{3})(\d{2})/', '$1 $2 $3 $4', $phone);
+        } elseif (strlen($phone) === 12 && str_starts_with($phone, '261')) {
+            return preg_replace('/(\d{3})(\d{2})(\d{2})(\d{3})(\d{2})/', '$1 $2 $3 $4 $5', $phone);
+        }
+        
+        return $this->telephone;
     }
 
-    public function isAgentSuivi()
+    // ✅ Accesseur pour les spécialisations formatées
+    public function getSpecialisationsListAttribute()
+    {
+        if (empty($this->specialisations)) {
+            return 'Aucune spécialisation';
+        }
+        
+        return is_array($this->specialisations) 
+            ? implode(', ', $this->specialisations)
+            : $this->specialisations;
+    }
+
+    // ✅ Accesseur pour le rôle formaté
+    public function getFormattedRoleAttribute()
+    {
+        $roles = [
+            'Admin' => 'Administrateur',
+            'Agent' => 'Agent',
+            'Investigateur' => 'Investigateur'
+        ];
+        
+        return $roles[$this->role] ?? $this->role;
+    }
+
+    // ✅ Méthodes de vérification des rôles
+    public function isAgent()
     {
         return $this->role === 'Agent';
     }
@@ -124,28 +177,7 @@ class TeamUser extends Authenticatable
         return $this->role === 'Admin';
     }
 
-    // Getters pour la compatibilité
-    public function getTelephoneFormattedAttribute()
-    {
-        $phone = preg_replace('/\D/', '', $this->telephone);
-        
-        if (strlen($phone) === 10 && str_starts_with($phone, '0')) {
-            return preg_replace('/(\d{2})(\d{2})(\d{3})(\d{2})/', '$1 $2 $3 $4', $phone);
-        } elseif (strlen($phone) === 12 && str_starts_with($phone, '261')) {
-            return preg_replace('/(\d{3})(\d{2})(\d{2})(\d{3})(\d{2})/', '$1 $2 $3 $4 $5', $phone);
-        }
-        
-        return $this->telephone;
-    }
-
-    public function getSpecialisationsListAttribute()
-    {
-        return is_array($this->specialisations) 
-            ? implode(', ', $this->specialisations)
-            : '';
-    }
-
-    // AJOUTÉ: Méthode pour mettre à jour la dernière connexion
+    // ✅ Méthode pour mettre à jour la dernière connexion
     public function updateLastLogin()
     {
         $this->update([
@@ -153,21 +185,77 @@ class TeamUser extends Authenticatable
         ]);
     }
 
-    // AJOUTÉ: Vérifier si l'utilisateur est actif
+    // ✅ Vérifier si l'utilisateur est actif
     public function isActive()
     {
         return $this->statut === true;
     }
 
-    // AJOUTÉ: Obtenir le rôle formaté
-    public function getFormattedRoleAttribute()
+    // ✅ Méthode pour obtenir les initiales (utilisée dans l'avatar)
+    public function getInitialsAttribute()
     {
-        $roles = [
-            'Admin' => 'Administrateur',
-            'Agent' => 'Agent',
-            'Investigateur' => 'Investigateur'
+        if ($this->first_name && $this->last_name) {
+            return strtoupper(substr($this->first_name, 0, 1) . substr($this->last_name, 0, 1));
+        }
+        
+        // Fallback sur le nom complet
+        $names = explode(' ', $this->nom_complet);
+        if (count($names) >= 2) {
+            return strtoupper(substr($names[0], 0, 1) . substr($names[1], 0, 1));
+        }
+        
+        return strtoupper(substr($this->nom_complet, 0, 2));
+    }
+
+    // ✅ Méthode pour vérifier les permissions basiques
+    public function hasPermission($permission)
+    {
+        // Permissions basées sur le rôle
+        $permissions = [
+            'Admin' => ['view_dashboard', 'manage_users', 'manage_reports', 'view_analytics'],
+            'Investigateur' => ['view_dashboard', 'manage_reports', 'view_analytics'],
+            'Agent' => ['view_dashboard', 'manage_reports']
         ];
         
-        return $roles[$this->role] ?? $this->role;
+        return in_array($permission, $permissions[$this->role] ?? []);
+    }
+
+    // ✅ Méthode pour obtenir les données de profil formatées
+    public function getProfileData()
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->nom_complet,
+            'first_name' => $this->first_name,
+            'last_name' => $this->last_name,
+            'email' => $this->email,
+            'phone' => $this->telephone,
+            'avatar' => $this->avatar_url,
+            'username' => $this->username,
+            'role' => $this->role,
+            'departement' => $this->departement,
+            'adresse' => $this->adresse,
+            'responsabilites' => $this->responsabilites,
+            'specialisations' => $this->specialisations,
+            'statut' => $this->statut,
+            'full_name' => $this->full_name,
+            'initials' => $this->initials,
+            'formatted_role' => $this->formatted_role,
+            'telephone_formatted' => $this->telephone_formatted,
+        ];
+    }
+
+    // ✅ Override de la méthode pour la route de notification
+    public function routeNotificationForMail($notification = null)
+    {
+        return $this->email;
+    }
+
+    // ✅ Scope pour rechercher par nom ou email
+    public function scopeSearch($query, $search)
+    {
+        return $query->where('nom_complet', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('username', 'like', "%{$search}%");
     }
 }

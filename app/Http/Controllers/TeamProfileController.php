@@ -18,7 +18,13 @@ class TeamProfileController extends Controller
     {
         try {
             $user = $request->user();
-            
+            if (!$user || !is_numeric($user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non valide ou token expiré'
+                ], 401);
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -40,11 +46,15 @@ class TeamProfileController extends Controller
                 ]
             ]);
         } catch (\Exception $e) {
-            Log::error('Erreur récupération profil:', ['error' => $e->getMessage()]);
+            Log::error('Erreur récupération profil TeamUser:', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id,
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la récupération du profil',
-                'error' => $e->getMessage()
+                'debug' => env('APP_DEBUG') ? $e->getMessage() : null
             ], 500);
         }
     }
@@ -56,6 +66,12 @@ class TeamProfileController extends Controller
     {
         try {
             $user = $request->user();
+            if (!$user || !is_numeric($user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non valide ou token expiré'
+                ], 401);
+            }
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
@@ -74,22 +90,22 @@ class TeamProfileController extends Controller
                 ], 422);
             }
 
-            // Préparer les données de mise à jour
-            $updateData = [
+            $updateData = array_filter([
                 'nom_complet' => $request->name,
                 'first_name' => $request->first_name,
                 'last_name' => $request->last_name,
                 'telephone' => $request->phone,
                 'adresse' => $request->adresse,
                 'departement' => $request->departement,
-            ];
+            ], fn($value) => $value !== null);
 
-            // Supprimer les champs null
-            $updateData = array_filter($updateData, function($value) {
-                return $value !== null;
-            });
+            Log::info('Mise à jour profil TeamUser:', [
+                'user_id' => $user->id,
+                'data' => $updateData
+            ]);
 
             $user->update($updateData);
+            $user->refresh();
 
             return response()->json([
                 'success' => true,
@@ -111,30 +127,39 @@ class TeamProfileController extends Controller
                     'statut' => $user->statut,
                 ]
             ]);
-
         } catch (\Exception $e) {
-            Log::error('Erreur mise à jour profil:', ['error' => $e->getMessage()]);
+            Log::error('Erreur mise à jour profil TeamUser:', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id,
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du profil'
+                'message' => 'Erreur lors de la mise à jour du profil',
+                'debug' => env('APP_DEBUG') ? $e->getMessage() : null
             ], 500);
         }
     }
 
     /**
-     * Mettre à jour l'avatar - CORRIGÉ
+     * Mettre à jour l'avatar
      */
     public function updateAvatar(Request $request)
     {
         try {
-            Log::info('Début upload avatar', ['files' => $request->all()]);
+            $user = $request->user();
+            if (!$user || !is_numeric($user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non valide ou token expiré'
+                ], 401);
+            }
 
             $validator = Validator::make($request->all(), [
-                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120' // 5MB
+                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120'
             ]);
 
             if ($validator->fails()) {
-                Log::error('Validation avatar échouée:', $validator->errors()->toArray());
                 return response()->json([
                     'success' => false,
                     'message' => 'Erreur de validation',
@@ -142,12 +167,7 @@ class TeamProfileController extends Controller
                 ], 422);
             }
 
-            $user = $request->user();
-            Log::info('Utilisateur trouvé:', ['user_id' => $user->id, 'email' => $user->email]);
-
-            // Vérifier si le fichier est présent
             if (!$request->hasFile('avatar')) {
-                Log::error('Aucun fichier avatar dans la requête');
                 return response()->json([
                     'success' => false,
                     'message' => 'Aucun fichier fourni'
@@ -155,99 +175,32 @@ class TeamProfileController extends Controller
             }
 
             $file = $request->file('avatar');
-            Log::info('Fichier reçu:', [
-                'name' => $file->getClientOriginalName(),
-                'size' => $file->getSize(),
-                'mime' => $file->getMimeType()
-            ]);
 
-            // Supprimer l'ancien avatar s'il existe
-            if ($user->avatar) {
-                Log::info('Suppression ancien avatar:', ['path' => $user->avatar]);
-                try {
-                    if (Storage::disk('public')->exists($user->avatar)) {
-                        Storage::disk('public')->delete($user->avatar);
-                        Log::info('Ancien avatar supprimé');
-                    }
-                } catch (\Exception $e) {
-                    Log::warning('Erreur suppression ancien avatar:', ['error' => $e->getMessage()]);
-                    // Continuer même si la suppression échoue
-                }
+            if ($user->avatar && Storage::disk('public')->exists($user->avatar)) {
+                Storage::disk('public')->delete($user->avatar);
             }
 
-            // Stocker le nouvel avatar
-            try {
-                $path = $file->store('avatars/team', 'public');
-                Log::info('Avatar stocké avec succès:', ['path' => $path]);
-                
-                // Mettre à jour l'utilisateur
-                $user->avatar = $path;
-                $user->save();
-                
-                Log::info('Utilisateur mis à jour avec nouvel avatar');
-
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Avatar mis à jour avec succès',
-                    'data' => [
-                        'avatar_url' => $user->avatar_url
-                    ]
-                ]);
-
-            } catch (\Exception $e) {
-                Log::error('Erreur stockage avatar:', ['error' => $e->getMessage()]);
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Erreur lors du stockage du fichier'
-                ], 500);
-            }
-
-        } catch (\Exception $e) {
-            Log::error('Erreur mise à jour avatar:', [
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la mise à jour de l\'avatar',
-                'error' => env('APP_DEBUG') ? $e->getMessage() : null
-            ], 500);
-        }
-    }
-
-    /**
-     * Supprimer l'avatar
-     */
-    public function deleteAvatar(Request $request)
-    {
-        try {
-            $user = $request->user();
-
-            if ($user->avatar) {
-                try {
-                    if (Storage::disk('public')->exists($user->avatar)) {
-                        Storage::disk('public')->delete($user->avatar);
-                    }
-                } catch (\Exception $e) {
-                    Log::warning('Erreur suppression avatar:', ['error' => $e->getMessage()]);
-                }
-            }
-
-            $user->avatar = null;
+            $path = $file->store('avatars/team', 'public');
+            $user->avatar = $path;
             $user->save();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Avatar supprimé avec succès'
+                'message' => 'Avatar mis à jour avec succès',
+                'data' => [
+                    'avatar_url' => $user->avatar_url
+                ]
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Erreur suppression avatar:', ['error' => $e->getMessage()]);
+            Log::error('Erreur mise à jour avatar TeamUser:', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id
+            ]);
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la suppression de l\'avatar'
+                'message' => 'Erreur lors de la mise à jour de l\'avatar',
+                'debug' => env('APP_DEBUG') ? $e->getMessage() : null
             ], 500);
         }
     }
@@ -258,6 +211,14 @@ class TeamProfileController extends Controller
     public function updatePassword(Request $request)
     {
         try {
+            $user = $request->user();
+            if (!$user || !is_numeric($user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non valide ou token expiré'
+                ], 401);
+            }
+
             $validator = Validator::make($request->all(), [
                 'current_password' => 'required|string',
                 'new_password' => 'required|string|min:8|confirmed',
@@ -271,9 +232,6 @@ class TeamProfileController extends Controller
                 ], 422);
             }
 
-            $user = $request->user();
-
-            // Vérifier le mot de passe actuel
             if (!Hash::check($request->current_password, $user->password)) {
                 return response()->json([
                     'success' => false,
@@ -281,7 +239,6 @@ class TeamProfileController extends Controller
                 ], 422);
             }
 
-            // Mettre à jour le mot de passe
             $user->password = Hash::make($request->new_password);
             $user->save();
 
@@ -291,7 +248,10 @@ class TeamProfileController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Erreur mise à jour mot de passe:', ['error' => $e->getMessage()]);
+            Log::error('Erreur mise à jour mot de passe TeamUser:', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la mise à jour du mot de passe'
@@ -300,59 +260,39 @@ class TeamProfileController extends Controller
     }
 
     /**
-     * Récupérer les statistiques personnelles de l'utilisateur
+     * Supprimer l'avatar
      */
-    public function getPersonalStats(Request $request)
+    public function deleteAvatar(Request $request)
     {
         try {
             $user = $request->user();
-            $role = $user->role;
-
-            // Statistiques basiques selon le rôle
-            $stats = [
-                'missions_en_cours' => 0,
-                'missions_terminees' => 0,
-                'rapports_soumis' => 0,
-                'taux_completion' => 0,
-            ];
-
-            switch ($role) {
-                case 'Agent':
-                    $stats = [
-                        'missions_en_cours' => 3,
-                        'missions_terminees' => 12,
-                        'rapports_soumis' => 15,
-                        'taux_completion' => 80,
-                    ];
-                    break;
-                case 'Investigateur':
-                    $stats = [
-                        'missions_en_cours' => 5,
-                        'missions_terminees' => 8,
-                        'rapports_soumis' => 13,
-                        'taux_completion' => 65,
-                    ];
-                    break;
-                case 'Admin':
-                    $stats = [
-                        'missions_en_cours' => 2,
-                        'missions_terminees' => 20,
-                        'rapports_soumis' => 22,
-                        'taux_completion' => 90,
-                    ];
-                    break;
+            if (!$user || !is_numeric($user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non valide ou token expiré'
+                ], 401);
             }
+
+            if ($user->avatar && Storage::disk('public')->exists($user->avatar)) {
+                Storage::disk('public')->delete($user->avatar);
+            }
+
+            $user->avatar = null;
+            $user->save();
 
             return response()->json([
                 'success' => true,
-                'data' => $stats
+                'message' => 'Avatar supprimé avec succès'
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Erreur récupération stats:', ['error' => $e->getMessage()]);
+            Log::error('Erreur suppression avatar TeamUser:', [
+                'error' => $e->getMessage(),
+                'user_id' => $request->user()?->id
+            ]);
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la récupération des statistiques'
+                'message' => 'Erreur lors de la suppression de l\'avatar'
             ], 500);
         }
     }

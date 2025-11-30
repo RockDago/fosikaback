@@ -2,11 +2,11 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Admin;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class AdminProfileController extends Controller
 {
@@ -15,23 +15,76 @@ class AdminProfileController extends Controller
         try {
             $admin = $request->user();
             
+            if (!$admin) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            // Vérifier que c'est bien un Admin
+            if (!($admin instanceof \App\Models\Admin)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé'
+                ], 403);
+            }
+
+            // Construction sécurisée des données avec valeurs par défaut
+            $profileData = [
+                'id' => $admin->id ?? null,
+                'name' => $admin->name ?? '',
+                'email' => $admin->email ?? '',
+                'first_name' => $admin->first_name ?? '',
+                'last_name' => $admin->last_name ?? '',
+                'phone' => $admin->phone ?? '',
+                'avatar' => null,
+                'full_name' => '',
+            ];
+
+            // Générer full_name de manière sécurisée
+            try {
+                if (!empty($admin->first_name) && !empty($admin->last_name)) {
+                    $profileData['full_name'] = trim($admin->first_name . ' ' . $admin->last_name);
+                } else {
+                    $profileData['full_name'] = $admin->name ?? '';
+                }
+            } catch (\Exception $e) {
+                Log::warning('Error generating full_name: ' . $e->getMessage());
+                $profileData['full_name'] = $admin->name ?? '';
+            }
+
+            // Générer avatar_url de manière sécurisée
+            try {
+                if (!empty($admin->avatar)) {
+                    if (filter_var($admin->avatar, FILTER_VALIDATE_URL)) {
+                        $profileData['avatar'] = $admin->avatar;
+                    } else {
+                        $profileData['avatar'] = url('storage/' . $admin->avatar);
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('Error generating avatar URL: ' . $e->getMessage());
+                $profileData['avatar'] = null;
+            }
+
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'id' => $admin->id,
-                    'name' => $admin->name,
-                    'email' => $admin->email,
-                    'first_name' => $admin->first_name,
-                    'last_name' => $admin->last_name,
-                    'phone' => $admin->phone,
-                    'avatar' => $admin->avatar_url,
-                    'full_name' => $admin->full_name,
-                ]
+                'data' => $profileData
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Erreur critique getProfile:', [
+                'message' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+                'trace' => $e->getTraceAsString()
             ]);
-        } catch (\Exception $e) {
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la récupération du profil'
+                'message' => 'Erreur lors du chargement du profil',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
@@ -40,6 +93,20 @@ class AdminProfileController extends Controller
     {
         try {
             $admin = $request->user();
+            
+            if (!$admin) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            if (!($admin instanceof \App\Models\Admin)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé'
+                ], 403);
+            }
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
@@ -56,18 +123,47 @@ class AdminProfileController extends Controller
                 ], 422);
             }
 
-            $admin->update($request->only(['name', 'first_name', 'last_name', 'phone']));
+            $admin->update([
+                'name' => $request->input('name'),
+                'first_name' => $request->input('first_name'),
+                'last_name' => $request->input('last_name'),
+                'phone' => $request->input('phone'),
+            ]);
+
+            // Recharger pour avoir les données à jour
+            $admin->refresh();
+
+            $fullName = '';
+            if ($admin->first_name && $admin->last_name) {
+                $fullName = trim($admin->first_name . ' ' . $admin->last_name);
+            } else {
+                $fullName = $admin->name;
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Profil mis à jour avec succès',
-                'data' => $admin
-            ]);
+                'data' => [
+                    'id' => $admin->id,
+                    'name' => $admin->name,
+                    'email' => $admin->email,
+                    'first_name' => $admin->first_name,
+                    'last_name' => $admin->last_name,
+                    'phone' => $admin->phone,
+                    'full_name' => $fullName,
+                ]
+            ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Erreur updateProfile:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du profil'
+                'message' => 'Erreur lors de la mise à jour du profil',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
@@ -75,8 +171,24 @@ class AdminProfileController extends Controller
     public function updateAvatar(Request $request)
     {
         try {
+            $admin = $request->user();
+            
+            if (!$admin) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            if (!($admin instanceof \App\Models\Admin)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé'
+                ], 403);
+            }
+
             $validator = Validator::make($request->all(), [
-                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120'
             ]);
 
             if ($validator->fails()) {
@@ -87,14 +199,12 @@ class AdminProfileController extends Controller
                 ], 422);
             }
 
-            $admin = $request->user();
-
-            // Supprimer l'ancien avatar s'il existe
-            if ($admin->avatar && Storage::exists($admin->avatar)) {
-                Storage::delete($admin->avatar);
+            // Supprimer l'ancien avatar
+            if ($admin->avatar && Storage::disk('public')->exists($admin->avatar)) {
+                Storage::disk('public')->delete($admin->avatar);
             }
 
-            // Stocker le nouvel avatar
+            // Sauvegarder le nouvel avatar
             $path = $request->file('avatar')->store('avatars', 'public');
             $admin->avatar = $path;
             $admin->save();
@@ -103,14 +213,20 @@ class AdminProfileController extends Controller
                 'success' => true,
                 'message' => 'Avatar mis à jour avec succès',
                 'data' => [
-                    'avatar_url' => $admin->avatar_url
+                    'avatar_url' => url('storage/' . $path)
                 ]
-            ]);
+            ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Erreur updateAvatar:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour de l\'avatar'
+                'message' => 'Erreur lors de la mise à jour de l\'avatar',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
@@ -119,9 +235,23 @@ class AdminProfileController extends Controller
     {
         try {
             $admin = $request->user();
+            
+            if (!$admin) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
 
-            if ($admin->avatar && Storage::exists($admin->avatar)) {
-                Storage::delete($admin->avatar);
+            if (!($admin instanceof \App\Models\Admin)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé'
+                ], 403);
+            }
+
+            if ($admin->avatar && Storage::disk('public')->exists($admin->avatar)) {
+                Storage::disk('public')->delete($admin->avatar);
             }
 
             $admin->avatar = null;
@@ -130,12 +260,18 @@ class AdminProfileController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Avatar supprimé avec succès'
-            ]);
+            ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Erreur deleteAvatar:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la suppression de l\'avatar'
+                'message' => 'Erreur lors de la suppression de l\'avatar',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
@@ -143,6 +279,22 @@ class AdminProfileController extends Controller
     public function updatePassword(Request $request)
     {
         try {
+            $admin = $request->user();
+            
+            if (!$admin) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilisateur non authentifié'
+                ], 401);
+            }
+
+            if (!($admin instanceof \App\Models\Admin)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé'
+                ], 403);
+            }
+
             $validator = Validator::make($request->all(), [
                 'current_password' => 'required|string',
                 'new_password' => 'required|string|min:8|confirmed',
@@ -156,9 +308,6 @@ class AdminProfileController extends Controller
                 ], 422);
             }
 
-            $admin = $request->user();
-
-            // Vérifier le mot de passe actuel
             if (!Hash::check($request->current_password, $admin->password)) {
                 return response()->json([
                     'success' => false,
@@ -166,19 +315,24 @@ class AdminProfileController extends Controller
                 ], 422);
             }
 
-            // Mettre à jour le mot de passe
             $admin->password = Hash::make($request->new_password);
             $admin->save();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Mot de passe mis à jour avec succès'
-            ]);
+            ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Erreur updatePassword:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du mot de passe'
+                'message' => 'Erreur lors de la mise à jour du mot de passe',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }

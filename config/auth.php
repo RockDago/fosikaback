@@ -1,100 +1,59 @@
 <?php
 
 return [
-
-    /*
-    |--------------------------------------------------------------------------
-    | Authentication Defaults
-    |--------------------------------------------------------------------------
-    */
-
     'defaults' => [
         'guard' => 'web',
         'passwords' => 'users',
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Authentication Guards
-    |--------------------------------------------------------------------------
-    */
-
     'guards' => [
-
-        // Utilisateurs normaux (TeamUser)
         'web' => [
             'driver' => 'session',
             'provider' => 'users',
         ],
-
-        // API Utilisateur normal avec Sanctum
-        'api' => [
-            'driver' => 'sanctum',
-            'provider' => 'users',
-        ],
-
-        // Admin avec SESSION (si tu fais login admin via formulaire)
-        'admin_web' => [
+        
+        // ✅ AJOUT: Guard pour Admin
+        'admin' => [
             'driver' => 'session',
             'provider' => 'admins',
         ],
 
-        // Admin avec API Sanctum (dashboard React)
-        'admin' => [
+        // ✅ Guard API Sanctum pour tous
+        'sanctum' => [
             'driver' => 'sanctum',
-            'provider' => 'admins',
+            'provider' => null, // Sanctum gère dynamiquement
         ],
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | User Providers
-    |--------------------------------------------------------------------------
-    */
-
     'providers' => [
-
-        // TeamUser (utilisateurs normaux)
         'users' => [
             'driver' => 'eloquent',
-            'model' => App\Models\TeamUser::class,
+            'model' => App\Models\User::class,
         ],
 
-        // Admin (administrateurs)
+        // ✅ AJOUT: Provider pour Admin
         'admins' => [
             'driver' => 'eloquent',
             'model' => App\Models\Admin::class,
         ],
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Password Reset Settings
-    |--------------------------------------------------------------------------
-    */
-
     'passwords' => [
         'users' => [
             'provider' => 'users',
-            'table' => 'password_resets',
+            'table' => 'password_reset_tokens',
             'expire' => 60,
             'throttle' => 60,
         ],
-
+        
+        // ✅ AJOUT: Reset password pour Admin
         'admins' => [
             'provider' => 'admins',
-            'table' => 'password_resets',
+            'table' => 'password_reset_tokens',
             'expire' => 60,
             'throttle' => 60,
         ],
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Password Confirmation Timeout
-    |--------------------------------------------------------------------------
-    */
-
     'password_timeout' => 10800,
-
 ];

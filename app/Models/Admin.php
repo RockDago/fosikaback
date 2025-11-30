@@ -5,19 +5,18 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Sanctum\HasApiTokens;
+use Laravel\Sanctum\HasApiTokens; // ✅ IMPORTANT
 use Illuminate\Support\Str;
 
 class Admin extends Authenticatable
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable; // ✅ HasApiTokens est obligatoire
 
-    // 👇 OBLIGATOIRE pour que le seeder insère dans la table admins
-    protected $table = 'admins';
+    protected $table = 'admins'; // ✅ Préciser la table
 
     protected $fillable = [
-        'name', 
-        'email', 
+        'name',
+        'email',
         'password',
         'first_name',
         'last_name',
@@ -25,13 +24,13 @@ class Admin extends Authenticatable
         'avatar',
         'session_id',
         'last_login_at',
-        'last_login_ip'
+        'last_login_ip',
     ];
 
     protected $hidden = [
-        'password', 
+        'password',
         'remember_token',
-        'session_id'
+        'session_id',
     ];
 
     protected $casts = [
@@ -39,6 +38,7 @@ class Admin extends Authenticatable
         'last_login_at' => 'datetime',
     ];
 
+    // ✅ Méthodes utilitaires
     public function getFullNameAttribute()
     {
         if ($this->first_name && $this->last_name) {
@@ -49,10 +49,18 @@ class Admin extends Authenticatable
 
     public function getAvatarUrlAttribute()
     {
-        if ($this->avatar) {
-            return asset('storage/' . $this->avatar);
+        try {
+            if ($this->avatar) {
+                if (filter_var($this->avatar, FILTER_VALIDATE_URL)) {
+                    return $this->avatar;
+                }
+                return url('storage/' . $this->avatar);
+            }
+            return null;
+        } catch (\Exception $e) {
+            \Log::error('Error generating avatar URL: ' . $e->getMessage());
+            return null;
         }
-        return null;
     }
 
     public function generateSessionId()
@@ -61,7 +69,6 @@ class Admin extends Authenticatable
         $this->last_login_at = now();
         $this->last_login_ip = request()->ip();
         $this->save();
-        
         return $this->session_id;
     }
 
