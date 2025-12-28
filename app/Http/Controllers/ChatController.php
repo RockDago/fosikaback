@@ -17,6 +17,7 @@ class ChatController extends Controller
 {
     /**
      * Vérifier les informations d'un signalement (public)
+     * Route: throttle:public (200/min)
      */
     public function checkReference(Request $request)
     {
@@ -63,41 +64,46 @@ class ChatController extends Controller
 
     /**
      * Vérifier si un chat existe pour une référence donnée
-     * Route: GET /api/chats/check-by-reference/{reference}
+     * Route: throttle:public (200/min)
      */
     public function checkChatByReference($reference)
     {
         try {
-            // Vérifier si le signalement existe
-            $report = Report::where('reference', $reference)->first();
+            // ✅ OPTIMISATION: Cache de 30 secondes pour éviter trop de requêtes DB
+            $cacheKey = "chat_exists_{$reference}";
+            
+            return Cache::remember($cacheKey, 30, function() use ($reference) {
+                // Vérifier si le signalement existe
+                $report = Report::where('reference', $reference)->first();
 
-            if (!$report) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Signalement non trouvé',
-                ], 404);
-            }
+                if (!$report) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Signalement non trouvé',
+                    ], 404);
+                }
 
-            // Chercher un chat actif pour ce signalement
-            $chat = Chat::where('reference', $reference)
-                ->where('status', 'active')
-                ->where('type', 'support')
-                ->first();
+                // Chercher un chat actif pour ce signalement
+                $chat = Chat::where('reference', $reference)
+                    ->where('status', 'active')
+                    ->where('type', 'support')
+                    ->first();
 
-            if ($chat) {
+                if ($chat) {
+                    return response()->json([
+                        'success' => true,
+                        'exists' => true,
+                        'chatid' => $chat->id,
+                        'reference' => $chat->reference,
+                    ]);
+                }
+
                 return response()->json([
                     'success' => true,
-                    'exists' => true,
-                    'chatid' => $chat->id,
-                    'reference' => $chat->reference,
+                    'exists' => false,
+                    'reference' => $reference,
                 ]);
-            }
-
-            return response()->json([
-                'success' => true,
-                'exists' => false,
-                'reference' => $reference,
-            ]);
+            });
         } catch (\Exception $e) {
             \Log::error('Erreur checkChatByReference: ' . $e->getMessage());
             return response()->json([
@@ -109,6 +115,7 @@ class ChatController extends Controller
 
     /**
      * Créer un chat de support (pour les visiteurs)
+     * Route: throttle:public (200/min)
      */
     public function createSupportChat(Request $request)
     {
@@ -126,14 +133,14 @@ class ChatController extends Controller
                 ->first();
 
             if ($existingChat) {
-                // Si un message est fourni, l'ajouter
-                if ($request->message) {
+                // ✅ CORRECTION : Ne pas ajouter de message vide
+                if ($request->message && trim($request->message) !== '') {
                     Message::create([
                         'chat_id' => $existingChat->id,
                         'sender_id' => null,
                         'sendername' => $request->name ?? $report->name ?? 'Visiteur',
                         'senderemail' => $report->email,
-                        'content' => $request->message,
+                        'content' => trim($request->message),
                         'type' => 'text',
                         'reference' => $report->reference,
                         'is_public' => true,
@@ -141,6 +148,9 @@ class ChatController extends Controller
                     ]);
 
                     $existingChat->update(['last_message_at' => now()]);
+                    
+                    // ✅ OPTIMISATION: Invalider le cache
+                    Cache::forget("chat_exists_{$report->reference}");
                 }
 
                 return response()->json([
@@ -149,6 +159,14 @@ class ChatController extends Controller
                     'is_new' => false,
                     'message' => $request->message ? 'Message ajouté au chat existant' : 'Chat existant trouvé',
                 ]);
+            }
+
+            // ✅ CORRECTION : Ne créer le chat QUE si un message est fourni et non vide
+            if (!$request->message || trim($request->message) === '') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Un message est requis pour démarrer la conversation',
+                ], 400);
             }
 
             // Créer un nouveau chat
@@ -160,20 +178,21 @@ class ChatController extends Controller
                 'last_message_at' => now(),
             ]);
 
-            // Si un message est fourni, l'ajouter
-            if ($request->message) {
-                Message::create([
-                    'chat_id' => $chat->id,
-                    'sender_id' => null,
-                    'sendername' => $request->name ?? $report->name ?? 'Visiteur',
-                    'senderemail' => $report->email,
-                    'content' => $request->message,
-                    'type' => 'text',
-                    'reference' => $report->reference,
-                    'is_public' => true,
-                    'status' => 'sent',
-                ]);
-            }
+            // Ajouter le premier message (on sait qu'il existe et n'est pas vide)
+            Message::create([
+                'chat_id' => $chat->id,
+                'sender_id' => null,
+                'sendername' => $request->name ?? $report->name ?? 'Visiteur',
+                'senderemail' => $report->email,
+                'content' => trim($request->message),
+                'type' => 'text',
+                'reference' => $report->reference,
+                'is_public' => true,
+                'status' => 'sent',
+            ]);
+
+            // ✅ OPTIMISATION: Invalider le cache
+            Cache::forget("chat_exists_{$report->reference}");
 
             return response()->json([
                 'success' => true,
@@ -196,6 +215,8 @@ class ChatController extends Controller
 
     /**
      * Mettre à jour le statut en ligne du visiteur
+     * Route: throttle:public (200/min)
+     * ✅ OPTIMISATION: Réduit les appels à cette méthode
      */
     public function updateVisitorOnlineStatus(Request $request, $chatId)
     {
@@ -213,11 +234,12 @@ class ChatController extends Controller
             $cacheKey = "visitor_online_{$chat->reference}";
 
             if ($request->is_online) {
+                // ✅ OPTIMISATION: Cache de 3 minutes au lieu de 2
                 Cache::put($cacheKey, [
                     'reference' => $chat->reference,
                     'last_seen' => now(),
                     'is_online' => true,
-                ], now()->addMinutes(2));
+                ], now()->addMinutes(3));
             } else {
                 Cache::forget($cacheKey);
             }
@@ -236,35 +258,42 @@ class ChatController extends Controller
 
     /**
      * Vérifier le statut en ligne d'un visiteur
+     * Route: throttle:chat (500/min)
+     * ✅ OPTIMISATION: Cette méthode est appelée fréquemment par le polling
      */
     public function getVisitorOnlineStatus($chatId)
     {
         try {
-            $chat = Chat::findOrFail($chatId);
+            // ✅ OPTIMISATION: Cache court pour réduire la charge DB
+            $cacheKey = "visitor_status_check_{$chatId}";
+            
+            return Cache::remember($cacheKey, 10, function() use ($chatId) {
+                $chat = Chat::findOrFail($chatId);
 
-            if (!$chat->reference) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Chat non trouvé',
-                ], 404);
-            }
+                if (!$chat->reference) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Chat non trouvé',
+                    ], 404);
+                }
 
-            $cacheKey = "visitor_online_{$chat->reference}";
-            $onlineData = Cache::get($cacheKey);
+                $onlineKey = "visitor_online_{$chat->reference}";
+                $onlineData = Cache::get($onlineKey);
 
-            if ($onlineData) {
+                if ($onlineData) {
+                    return response()->json([
+                        'success' => true,
+                        'isonline' => true,
+                        'lastseen' => $onlineData['last_seen'],
+                    ]);
+                }
+
                 return response()->json([
                     'success' => true,
-                    'isonline' => true,
-                    'lastseen' => $onlineData['last_seen'],
+                    'isonline' => false,
+                    'lastseen' => null,
                 ]);
-            }
-
-            return response()->json([
-                'success' => true,
-                'isonline' => false,
-                'lastseen' => null,
-            ]);
+            });
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -275,10 +304,10 @@ class ChatController extends Controller
 
     /**
      * Envoyer un message depuis un chat public (visiteur)
+     * Route: throttle:public (200/min)
      */
     public function sendPublicMessage(Request $request, $chatId)
     {
-        // ✅ LOGS DE DÉBOGAGE
         \Log::info('=== DÉBUT sendPublicMessage ===');
         \Log::info('Chat ID: ' . $chatId);
         \Log::info('Request all:', $request->all());
@@ -310,13 +339,11 @@ class ChatController extends Controller
                 'status' => 'sent',
             ];
 
-            // ✅ LOG AVANT L'UPLOAD
             \Log::info('Message data avant upload:', $messageData);
 
             if ($request->hasFile('file') && in_array($request->type, ['file', 'image', 'video'])) {
                 $file = $request->file('file');
 
-                // ✅ LOG DU FICHIER
                 \Log::info('Fichier reçu:', [
                     'original_name' => $file->getClientOriginalName(),
                     'size' => $file->getSize(),
@@ -341,7 +368,6 @@ class ChatController extends Controller
                 $filename = Str::uuid() . '_' . time() . '.' . $file->getClientOriginalExtension();
                 $path = $file->storeAs("chat_files/{$chat->id}", $filename, 'public');
 
-                // ✅ LOG DU CHEMIN
                 \Log::info('Fichier stocké:', [
                     'path' => $path,
                     'filename' => $filename,
@@ -362,12 +388,10 @@ class ChatController extends Controller
                 $messageData['content'] = $request->content;
             }
 
-            // ✅ LOG AVANT L'INSERTION
             \Log::info('Message data final:', $messageData);
 
             $message = Message::create($messageData);
 
-            // ✅ LOG APRÈS L'INSERTION
             \Log::info('Message créé:', [
                 'id' => $message->id,
                 'filepath' => $message->filepath,
@@ -383,11 +407,14 @@ class ChatController extends Controller
                 'is_online' => true,
             ], now()->addMinutes(2));
 
+            // ✅ OPTIMISATION: Invalider les caches pertinents
+            Cache::forget("chat_details_{$chat->id}");
+            Cache::forget("visitor_status_check_{$chat->id}");
+
             DB::commit();
 
             \Log::info('=== FIN sendPublicMessage SUCCESS ===');
 
-            // Construction de fileInfo
             $fileInfo = null;
             if ($message->filepath) {
                 $fileInfo = [
@@ -429,81 +456,80 @@ class ChatController extends Controller
         }
     }
 
-
     /**
      * Voir une conversation en lecture seule (pour visiteurs)
-     */
-    /**
-     * Voir une conversation en lecture seule (pour visiteurs)
+     * Route: throttle:public (200/min)
+     * ✅ OPTIMISATION: Cache ajouté
      */
     public function showPublic($id)
     {
-        $chat = Chat::with(['report', 'messages' => function($q) {
-            $q->where('is_public', true)->orderBy('created_at', 'asc');
-        }])->findOrFail($id);
+        // ✅ OPTIMISATION: Cache de 5 secondes pour les visiteurs
+        $cacheKey = "chat_public_view_{$id}";
+        
+        return Cache::remember($cacheKey, 5, function() use ($id) {
+            $chat = Chat::with(['report', 'messages' => function($q) {
+                $q->where('is_public', true)->orderBy('created_at', 'asc');
+            }])->findOrFail($id);
 
-        $report = $chat->report;
-        $isAnonymous = empty($report->name) || $report->name === 'Anonyme';
-        $visitorName = $report->name ?? 'Visiteur';
+            $report = $chat->report;
+            $isAnonymous = empty($report->name) || $report->name === 'Anonyme';
+            $visitorName = $report->name ?? 'Visiteur';
 
-        // ✅ NE PAS marquer comme "delivered" automatiquement pour détecter les nouveaux messages
-        // On le fera seulement quand l'utilisateur ouvre vraiment le chat
+            return response()->json([
+                'success' => true,
+                'chat' => [
+                    'id' => $chat->id,
+                    'reference' => $chat->reference,
+                    'report_title' => $report ? ($report->getTypeLabel('fr') . ' - ' . $report->getCategoryLabel('fr')) : 'Signalement',
+                    'messages' => $chat->messages->map(function($message) use ($isAnonymous, $visitorName) {
+                        $fileInfo = null;
+                        if ($message->filepath) {
+                            $fileInfo = [
+                                'name' => $message->filename,
+                                'size' => $this->formatFileSize($message->filesize),
+                                'filesize' => $message->filesize,
+                                'type' => $message->filetype,
+                                'url' => url('api/files/public/' . basename($message->filepath)),
+                                'preview' => $message->type === 'image' ? url('api/files/public/' . basename($message->filepath)) : null,
+                            ];
+                        }
 
-        return response()->json([
-            'success' => true,
-            'chat' => [
-                'id' => $chat->id,
-                'reference' => $chat->reference,
-                'report_title' => $report ? ($report->getTypeLabel('fr') . ' - ' . $report->getCategoryLabel('fr')) : 'Signalement',
-                'messages' => $chat->messages->map(function($message) use ($isAnonymous, $visitorName) {
-                    $fileInfo = null;
-                    if ($message->filepath) {
-                        $fileInfo = [
-                            'name' => $message->filename,
-                            'size' => $this->formatFileSize($message->filesize),
-                            'filesize' => $message->filesize,
-                            'type' => $message->filetype,
-                            'url' => url('api/files/public/' . basename($message->filepath)),
-                            'preview' => $message->type === 'image' ? url('api/files/public/' . basename($message->filepath)) : null,
+                        return [
+                            'id' => $message->id,
+                            'text' => $message->content,
+                            'content' => $message->content,
+                            'time' => $this->formatTime($message->created_at),
+                            'createdat' => $message->created_at,
+                            'sender' => $message->sender_id ? 'support' : 'visitor',
+                            'sendername' => $message->sender_id
+                                ? ($message->sender ? $message->sender->full_name : 'Support')
+                                : ($isAnonymous ? 'Anonyme' : $visitorName),
+                            'isanonymous' => !$message->sender_id && $isAnonymous,
+                            'status' => $message->status,
+                            'readat' => $message->read_at,
+                            'deliveredat' => $message->delivered_at,
+                            'type' => $message->type,
+                            'fileinfo' => $fileInfo,
                         ];
-                    }
-
-                    return [
-                        'id' => $message->id,
-                        'text' => $message->content,
-                        'content' => $message->content,
-                        'time' => $this->formatTime($message->created_at),
-                        'createdat' => $message->created_at,
-                        'sender' => $message->sender_id ? 'support' : 'visitor',
-                        'sendername' => $message->sender_id
-                            ? ($message->sender ? $message->sender->full_name : 'Support')
-                            : ($isAnonymous ? 'Anonyme' : $visitorName),
-                        'isanonymous' => !$message->sender_id && $isAnonymous,
-                        'status' => $message->status,
-                        'readat' => $message->read_at,        // ✅ IMPORTANT
-                        'deliveredat' => $message->delivered_at,  // ✅ IMPORTANT
-                        'type' => $message->type,
-                        'fileinfo' => $fileInfo,
-                    ];
-                }),
-                'is_active' => $chat->status === 'active',
-                'created_at' => $chat->created_at->format('d/m/Y H:i'),
-            ]
-        ]);
+                    }),
+                    'is_active' => $chat->status === 'active',
+                    'created_at' => $chat->created_at->format('d/m/Y H:i'),
+                ]
+            ]);
+        });
     }
-
 
     /**
      * Marquer les messages du support comme lus (pour visiteurs)
+     * Route: throttle:public (200/min)
      */
     public function markPublicAsRead($id)
     {
         try {
             $chat = Chat::where('status', 'active')->findOrFail($id);
 
-            // Marquer tous les messages du support non lus comme lus
             $chat->messages()
-                ->whereNotNull('sender_id')  // Messages du support
+                ->whereNotNull('sender_id')
                 ->where(function($q) {
                     $q->whereNull('read_at')
                         ->orWhere('status', '!=', 'read');
@@ -513,6 +539,9 @@ class ChatController extends Controller
                     'status' => 'read',
                     'delivered_at' => DB::raw('COALESCE(delivered_at, NOW())')
                 ]);
+
+            // ✅ OPTIMISATION: Invalider le cache
+            Cache::forget("chat_public_view_{$id}");
 
             return response()->json([
                 'success' => true,
@@ -527,33 +556,45 @@ class ChatController extends Controller
     }
 
     /**
-     * Récupérer les conversations récentes (publiques)
+     * ✅ OPTIMISATION : Récupérer les conversations récentes (publiques)
+     * Route: throttle:public (200/min)
      */
     public function getRecentPublicChats()
     {
         try {
-            $chats = Chat::where('status', 'active')
-                ->where('type', 'support')
-                ->with(['report', 'messages'])
-                ->latest('last_message_at')
-                ->limit(5)
-                ->get();
+            // ✅ OPTIMISATION: Cache de 30 secondes
+            return Cache::remember('recent_public_chats', 30, function() {
+                $chats = Chat::where('status', 'active')
+                    ->where('type', 'support')
+                    ->with(['report'])
+                    ->orderBy('last_message_at', 'DESC')
+                    ->limit(5)
+                    ->get();
 
-            return response()->json([
-                'success' => true,
-                'chats' => $chats->map(function($chat) {
-                    return [
-                        'id' => $chat->id,
-                        'reference' => $chat->reference,
-                        'report_title' => $chat->report ?
-                            ($chat->report->getTypeLabel('fr') . ' - ' . $chat->report->getCategoryLabel('fr'))
-                            : 'Signalement',
-                        'lastMessageAt' => $chat->last_message_at ?
-                            $this->formatTime($chat->last_message_at) : null,
-                        'messageCount' => $chat->messages->count(),
-                    ];
-                })
-            ]);
+                return response()->json([
+                    'success' => true,
+                    'chats' => $chats->map(function($chat) {
+                        // Récupérer le dernier message
+                        $lastMessage = DB::table('messages')
+                            ->where('chat_id', $chat->id)
+                            ->orderBy('created_at', 'DESC')
+                            ->limit(1)
+                            ->first();
+                        
+                        return [
+                            'id' => $chat->id,
+                            'reference' => $chat->reference,
+                            'report_title' => $chat->report ?
+                                ($chat->report->getTypeLabel('fr') . ' - ' . $chat->report->getCategoryLabel('fr'))
+                                : 'Signalement',
+                            'lastMessage' => $lastMessage ? $lastMessage->content : 'Pas de message',
+                            'lastMessageAt' => $chat->last_message_at ?
+                                $this->formatTime($chat->last_message_at) : null,
+                            'messageCount' => DB::table('messages')->where('chat_id', $chat->id)->count(),
+                        ];
+                    })
+                ]);
+            });
         } catch (\Exception $e) {
             \Log::error('Erreur getRecentPublicChats: ' . $e->getMessage());
             return response()->json([
@@ -564,90 +605,107 @@ class ChatController extends Controller
         }
     }
 
+    public function servePublicFile($filename)
+    {
+        $filename = basename($filename);
 
-public function servePublicFile($filename)
-{
-    $filename = basename($filename);
+        $base = storage_path('app/public/chat_files');
+        if (!is_dir($base)) {
+            return response()->json([
+                'error' => 'Dossier chat_files introuvable',
+                'path'  => $base,
+            ], 404);
+        }
 
-    $base = storage_path('app/public/chat_files');
-    if (!is_dir($base)) {
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($base, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        foreach ($it as $file) {
+            if ($file->isFile() && $file->getFilename() === $filename) {
+                return response()->file($file->getRealPath(), [
+                    'Access-Control-Allow-Origin' => '*',
+                    'Cache-Control' => 'public, max-age=31536000',
+                ]);
+            }
+        }
+
         return response()->json([
-            'error' => 'Dossier chat_files introuvable',
-            'path'  => $base,
+            'error' => "Erreur lors de l'accès au fichier",
+            'message' => 'Fichier non trouvé: ' . $filename,
         ], 404);
     }
 
-    $it = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($base, \RecursiveDirectoryIterator::SKIP_DOTS),
-        \RecursiveIteratorIterator::LEAVES_ONLY
-    );
-
-    foreach ($it as $file) {
-        if ($file->isFile() && $file->getFilename() === $filename) {
-            return response()->file($file->getRealPath(), [
-                'Access-Control-Allow-Origin' => '*',
-                'Cache-Control' => 'public, max-age=31536000',
-            ]);
-        }
-    }
-
-    return response()->json([
-        'error' => "Erreur lors de l'accès au fichier",
-        'message' => 'Fichier non trouvé: ' . $filename,
-    ], 404);
-}
-
-
     // =========================================
     // MÉTHODES PROTÉGÉES (AVEC AUTH)
+    // Route: throttle:chat (500/min)
     // =========================================
 
     /**
-     * Récupérer toutes les conversations d'un utilisateur
+     * ✅ OPTIMISATION : Récupérer toutes les conversations d'un utilisateur
      */
     public function index(Request $request)
     {
         $user = Auth::user();
         $filter = $request->get('filter', 'all');
 
-        $query = Chat::forUser($user->id)
-            ->with(['report', 'participants.user'])
-            ->latest('last_message_at');
+        // ✅ OPTIMISATION: Cache de 3 secondes pour limiter les requêtes DB
+        $cacheKey = "user_chats_{$user->id}_{$filter}";
+        
+        return Cache::remember($cacheKey, 3, function() use ($user, $filter) {
+            $query = Chat::forUser($user->id)
+                ->with(['report', 'participants.user'])
+                ->orderBy('last_message_at', 'DESC');
 
-        if ($filter === 'unread') {
-            $query->withUnread($user->id);
-        } elseif ($filter === 'important') {
-            $query->important();
-        }
+            if ($filter === 'unread') {
+                $query->withUnread($user->id);
+            } elseif ($filter === 'important') {
+                $query->important();
+            }
 
-        $chats = $query->get()->map(function($chat) use ($user) {
-            return $this->formatChatForList($chat, $user);
+            $chats = $query->get()->map(function($chat) use ($user) {
+                return $this->formatChatForList($chat, $user);
+            });
+
+            return response()->json([
+                'success' => true,
+                'chats' => $chats,
+                'filters' => [
+                    'all' => Chat::forUser($user->id)->count(),
+                    'unread' => Chat::forUser($user->id)->withUnread($user->id)->count(),
+                    'important' => Chat::forUser($user->id)->important()->count(),
+                ]
+            ]);
         });
-
-        return response()->json([
-            'success' => true,
-            'chats' => $chats,
-            'filters' => [
-                'all' => Chat::forUser($user->id)->count(),
-                'unread' => Chat::forUser($user->id)->withUnread($user->id)->count(),
-                'important' => Chat::forUser($user->id)->important()->count(),
-            ]
-        ]);
     }
 
     /**
      * Récupérer une conversation spécifique
+     * ✅ OPTIMISATION: Cache de 2 secondes
      */
     public function show($id)
     {
         $user = Auth::user();
 
-        $chat = Chat::with(['report', 'messages' => function($q) {
-            $q->orderBy('created_at', 'asc');
-        }, 'messages.sender', 'participants.user'])
-            ->forUser($user->id)
-            ->findOrFail($id);
+        // ✅ OPTIMISATION: Cache court
+        $cacheKey = "chat_details_{$id}_{$user->id}";
+        
+        $result = Cache::remember($cacheKey, 2, function() use ($id, $user) {
+            $chat = Chat::with(['report', 'messages' => function($q) {
+                $q->orderBy('created_at', 'asc');
+            }, 'messages.sender', 'participants.user'])
+                ->forUser($user->id)
+                ->findOrFail($id);
 
+            return [
+                'success' => true,
+                'chat' => $this->formatChatForDetail($chat, $user->id),
+            ];
+        });
+
+        // Marquer comme lu (hors cache)
+        $chat = Chat::findOrFail($id);
         $chat->messages()
             ->whereNull('sender_id')
             ->where(function($q) {
@@ -660,10 +718,7 @@ public function servePublicFile($filename)
                 'read_at' => now()
             ]);
 
-        return response()->json([
-            'success' => true,
-            'chat' => $this->formatChatForDetail($chat, $user->id),
-        ]);
+        return response()->json($result);
     }
 
     /**
@@ -712,6 +767,13 @@ public function servePublicFile($filename)
             $message = Message::create($messageData);
             $chat->update(['last_message_at' => now()]);
 
+            // ✅ OPTIMISATION: Invalider les caches
+            Cache::forget("chat_details_{$chat->id}_{$user->id}");
+            Cache::forget("user_chats_{$user->id}_all");
+            Cache::forget("user_chats_{$user->id}_unread");
+            Cache::forget("user_chats_{$user->id}_important");
+            Cache::forget("chat_public_view_{$chat->id}");
+
             DB::commit();
 
             return response()->json([
@@ -737,7 +799,7 @@ public function servePublicFile($filename)
 
         $request->validate([
             'file' => 'required|file|max:10240',
-            'type' => 'required|in:document,image',
+            'type' => 'required|in:document,image,video',
         ]);
 
         $chat = Chat::forUser($user->id)->findOrFail($chatId);
@@ -746,6 +808,10 @@ public function servePublicFile($filename)
         if ($request->type === 'image') {
             $request->validate([
                 'file' => 'image|mimes:jpeg,jpg,png,gif,webp|max:5120'
+            ]);
+        } elseif ($request->type === 'video') {
+            $request->validate([
+                'file' => 'mimes:mp4,mov,avi,wmv|max:10240'
             ]);
         } else {
             $request->validate([
@@ -762,8 +828,9 @@ public function servePublicFile($filename)
             $message = Message::create([
                 'chat_id' => $chat->id,
                 'sender_id' => $user->id,
-                'content' => $request->type === 'image' ? '📷 Image jointe' : '📎 Fichier joint',
-                'type' => $request->type === 'image' ? 'image' : 'file',
+                'content' => $request->type === 'image' ? '📷 Image jointe' : 
+                            ($request->type === 'video' ? '🎥 Vidéo jointe' : '📎 Fichier joint'),
+                'type' => $request->type === 'image' ? 'image' : ($request->type === 'video' ? 'video' : 'file'),
                 'reference' => $chat->reference,
                 'filename' => $file->getClientOriginalName(),
                 'filepath' => $path,
@@ -774,6 +841,11 @@ public function servePublicFile($filename)
             ]);
 
             $chat->update(['last_message_at' => now()]);
+
+            // ✅ OPTIMISATION: Invalider les caches
+            Cache::forget("chat_details_{$chat->id}_{$user->id}");
+            Cache::forget("user_chats_{$user->id}_all");
+            Cache::forget("chat_public_view_{$chat->id}");
 
             DB::commit();
 
@@ -809,6 +881,10 @@ public function servePublicFile($filename)
 
         $isImportant = $chat->toggleImportant();
 
+        // ✅ OPTIMISATION: Invalider le cache
+        Cache::forget("user_chats_{$user->id}_all");
+        Cache::forget("user_chats_{$user->id}_important");
+
         return response()->json([
             'success' => true,
             'isimportant' => $isImportant,
@@ -838,10 +914,122 @@ public function servePublicFile($filename)
                 'delivered_at' => DB::raw('COALESCE(delivered_at, NOW())')
             ]);
 
+        // ✅ OPTIMISATION: Invalider le cache
+        Cache::forget("user_chats_{$user->id}_all");
+        Cache::forget("user_chats_{$user->id}_unread");
+        Cache::forget("chat_details_{$id}_{$user->id}");
+
         return response()->json([
             'success' => true,
             'message' => 'Conversation marquée comme lue',
         ]);
+    }
+
+    /**
+     * Créer un chat Admin
+     */
+    public function createAdminChat(Request $request)
+    {
+        $adminId = Auth::id() ?? auth('sanctum')->id();
+        $adminUser = Auth::user() ?? auth('sanctum')->user();
+
+        if (!$adminId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Non autorisé : Vous devez être connecté en tant qu\'administrateur.'
+            ], 401);
+        }
+
+        $request->validate([
+            'reference' => 'required|string',
+            'message' => 'required|string'
+        ]);
+
+        $reference = $request->reference;
+        $content = $request->message;
+
+        try {
+            DB::beginTransaction();
+
+            $existingChat = Chat::where('reference', $reference)
+                ->where('status', 'active')
+                ->first();
+
+            if ($existingChat) {
+                Message::create([
+                    'chat_id' => $existingChat->id,
+                    'sender_id' => $adminId,
+                    'sendername' => $adminUser->name ?? 'Support',
+                    'content' => $content,
+                    'type' => 'text',
+                    'reference' => $reference,
+                    'is_public' => true,
+                    'status' => 'sent',
+                ]);
+
+                $existingChat->update(['last_message_at' => now()]);
+
+                // ✅ OPTIMISATION: Invalider les caches
+                Cache::forget("chat_details_{$existingChat->id}_{$adminId}");
+                Cache::forget("chat_public_view_{$existingChat->id}");
+                Cache::forget("user_chats_{$adminId}_all");
+
+                DB::commit();
+
+                $existingChat->load(['messages' => function($q) {
+                    $q->orderBy('created_at', 'asc');
+                }]);
+
+                return response()->json([
+                    'success' => true,
+                    'chat' => $this->formatChatForDetail($existingChat, $adminId),
+                    'message' => 'Message ajouté'
+                ]);
+            }
+
+            $chat = Chat::create([
+                'reference' => $reference,
+                'title' => "Support - {$reference}",
+                'type' => 'support',
+                'status' => 'active',
+                'last_message_at' => now(),
+            ]);
+
+            Message::create([
+                'chat_id' => $chat->id,
+                'sender_id' => $adminId,
+                'sendername' => $adminUser->name ?? 'Support',
+                'content' => $content,
+                'type' => 'text',
+                'reference' => $reference,
+                'is_public' => true,
+                'status' => 'sent',
+            ]);
+
+            // ✅ OPTIMISATION: Invalider le cache
+            Cache::forget("user_chats_{$adminId}_all");
+            Cache::forget("chat_exists_{$reference}");
+
+            DB::commit();
+
+            $chat->load(['messages' => function($q) {
+                $q->orderBy('created_at', 'asc');
+            }]);
+
+            return response()->json([
+                'success' => true,
+                'chat' => $this->formatChatForDetail($chat, $adminId),
+                'message' => 'Conversation créée avec succès'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error("Erreur createAdminChat: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur création: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     // =========================================
@@ -893,7 +1081,7 @@ public function servePublicFile($filename)
                 'reference' => $chat->reference,
                 'isanonymous' => $isAnonymous,
                 'dossierTitre' => $report ? ($report->getTypeLabel('fr') . ' - ' . $report->getCategoryLabel('fr')) : 'Signalement',
-                'sharedFiles' => $chat->messages()->whereIn('type', ['file', 'image'])->count(),
+                'sharedFiles' => $chat->messages()->whereIn('type', ['file', 'image', 'video'])->count(),
             ];
         }
 
@@ -928,7 +1116,7 @@ public function servePublicFile($filename)
             'reference' => $chat->reference,
             'isanonymous' => false,
             'dossierTitre' => $chat->report ? ($chat->report->getTypeLabel('fr') . ' - ' . $chat->report->getCategoryLabel('fr')) : 'Signalement',
-            'sharedFiles' => $chat->messages()->whereIn('type', ['file', 'image'])->count(),
+            'sharedFiles' => $chat->messages()->whereIn('type', ['file', 'image', 'video'])->count(),
         ];
     }
 
@@ -980,12 +1168,12 @@ public function servePublicFile($filename)
                     return $this->formatMessage($message, $user ? $user->id : null, $isAnonymous, $visitorName);
                 }),
                 'sharedFiles' => $chat->messages()
-                    ->whereIn('type', ['file', 'image'])
+                    ->whereIn('type', ['file', 'image', 'video'])
                     ->get()
                     ->map(function($message) {
                         return [
                             'name' => $message->filename,
-                            'type' => $message->type === 'image' ? 'image' : 'pdf',
+                            'type' => $message->type === 'image' ? 'image' : ($message->type === 'video' ? 'video' : 'pdf'),
                             'size' => $this->formatFileSize($message->filesize),
                             'time' => $this->formatTime($message->created_at),
                         ];
@@ -1019,12 +1207,12 @@ public function servePublicFile($filename)
                 return $this->formatMessage($message, $user ? $user->id : null);
             }),
             'sharedFiles' => $chat->messages()
-                ->whereIn('type', ['file', 'image'])
+                ->whereIn('type', ['file', 'image', 'video'])
                 ->get()
                 ->map(function($message) {
                     return [
                         'name' => $message->filename,
-                        'type' => $message->type === 'image' ? 'image' : 'pdf',
+                        'type' => $message->type === 'image' ? 'image' : ($message->type === 'video' ? 'video' : 'pdf'),
                         'size' => $this->formatFileSize($message->filesize),
                         'time' => $this->formatTime($message->created_at),
                     ];
@@ -1054,7 +1242,6 @@ public function servePublicFile($filename)
             $senderType = 'support';
         }
 
-        // ✅ Les accesseurs permettent d'utiliser filepath, filename, etc.
         $fileInfo = null;
         if ($message->filepath) {
             $fileInfo = [
@@ -1102,66 +1289,12 @@ public function servePublicFile($filename)
     }
 
     private function formatTime($datetime)
-    {
-        if (!$datetime) return '';
+{
+    if (!$datetime) return '';
+    $date = $datetime instanceof \Carbon\Carbon ? $datetime : \Carbon\Carbon::parse($datetime);
+    // Force le fuseau horaire Madagascar
+    return $date->setTimezone('Indian/Antananarivo')->format('H:i');
+}
 
-        if ($datetime instanceof \Carbon\Carbon) {
-            return $datetime->format('H:i');
-        }
-
-        return \Carbon\Carbon::parse($datetime)->format('H:i');
-    }
-
-    public function createAdminChat(Request $request)
-    {
-        $request->validate([
-            'reference' => 'required|string|exists:reports,reference',
-            'message' => 'nullable|string'
-        ]);
-
-        $reference = $request->reference;
-
-        // Vérifier si un chat existe déjà pour cette référence
-        $existingChat = Chat::where('reference', $reference)->first();
-
-        if ($existingChat) {
-            return response()->json([
-                'success' => true,
-                'chat' => $existingChat,
-                'message' => 'Conversation existante trouvée'
-            ]);
-        }
-
-        // Récupérer les infos du signalement
-        $report = Report::where('reference', $reference)->first();
-
-        // Créer le nouveau chat
-        $chat = Chat::create([
-            'reference' => $reference,
-            'visitor_name' => $report->is_anonymous ? 'Anonyme' : $report->name,
-            'is_anonymous' => $report->is_anonymous,
-            'dossier_titre' => $report->title ?? 'Signalement',
-            'status' => 'active',
-            'initiated_by' => 'admin' // Important : marqueur admin
-        ]);
-
-        // Envoyer le premier message automatique (optionnel)
-        if ($request->message) {
-            Message::create([
-                'chat_id' => $chat->id,
-                'sender' => 'me',
-                'sender_type' => 'support',
-                'type' => 'text',
-                'text' => $request->message,
-                'status' => 'sent'
-            ]);
-        }
-
-        return response()->json([
-            'success' => true,
-            'chat' => $chat->load('messages'),
-            'message' => 'Conversation créée avec succès'
-        ]);
-    }
 
 }

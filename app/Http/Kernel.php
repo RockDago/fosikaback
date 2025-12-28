@@ -40,6 +40,8 @@ class Kernel extends HttpKernel
         'api' => [
             // ✅ RETIREZ HandleCors car vous utilisez CorsFix à la place
             // \Illuminate\Http\Middleware\HandleCors::class,
+            
+            // ✅ CORRECTION: Augmentation de la limite pour le chat
             'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
@@ -59,7 +61,10 @@ class Kernel extends HttpKernel
         'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
         'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
         'signed' => \Illuminate\Routing\Middleware\ValidateSignature::class,
+        
+        // ✅ CORRECTION: Throttle reste ici
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'precognitive' => \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
 

@@ -39,14 +39,46 @@ class RouteServiceProvider extends ServiceProvider
     }
 
     /**
-     * Configure the rate limiters for the application.
+     * ✅ CORRECTION: Configure the rate limiters for the application.
      *
      * @return void
      */
     protected function configureRateLimiting()
     {
+        // ✅ Limite générale pour l'API (augmentée de 60 à 300 requêtes/minute)
         RateLimiter::for('api', function (Request $request) {
-            return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+            return Limit::perMinute(300)  // ✅ Augmenté de 60 à 300
+                ->by($request->user()?->id ?: $request->ip())
+                ->response(function (Request $request, array $headers) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Trop de requêtes. Veuillez patienter quelques instants.'
+                    ], 429, $headers);
+                });
+        });
+
+        // ✅ NOUVEAU: Limite spécifique pour les routes de chat (500 requêtes/minute)
+        RateLimiter::for('chat', function (Request $request) {
+            return Limit::perMinute(500)  // Plus élevé pour le chat temps réel
+                ->by($request->user()?->id ?: $request->ip())
+                ->response(function (Request $request, array $headers) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Trop de requêtes sur le chat. Veuillez ralentir.'
+                    ], 429, $headers);
+                });
+        });
+
+        // ✅ NOUVEAU: Limite pour les routes publiques (200 requêtes/minute)
+        RateLimiter::for('public', function (Request $request) {
+            return Limit::perMinute(200)
+                ->by($request->ip())
+                ->response(function (Request $request, array $headers) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Trop de tentatives. Réessayez dans quelques instants.'
+                    ], 429, $headers);
+                });
         });
     }
 }
