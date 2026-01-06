@@ -41,16 +41,52 @@ class EnseignantController extends Controller
             $query->where('sexe', $request->sexe);
         }
 
-        // Recherche par nom
-        if ($request->has('search')) {
-            $query->where('nom', 'like', '%' . $request->search . '%');
+        // ✅ CORRECTION: Recherche avancée dans MULTIPLES champs
+        if ($request->has('search') && $request->search != '') {
+            $searchTerm = $request->search;
+            $query->where(function($q) use ($searchTerm) {
+                $q->where('nom', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('im', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('diplome', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('specialite', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('corps', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('categorie', 'like', '%' . $searchTerm . '%');
+            });
         }
 
-        // Pagination
-        $perPage = $request->get('per_page', 10);
+        // ✅ CORRECTION: Augmenter le per_page par défaut pour éviter les problèmes
+        $perPage = $request->get('per_page', 100); // Augmenté à 100 par défaut
         $enseignants = $query->paginate($perPage);
 
         return response()->json($enseignants);
+    }
+
+    /**
+     * ✅ AJOUT: Récupérer TOUS les enseignants sans pagination (pour export/filtrage côté client)
+     */
+    public function getAll(Request $request)
+    {
+        $query = Enseignant::with(['universite', 'etablissement']);
+
+        // Filtres de base
+        if ($request->has('universite_id')) {
+            $query->where('universite_id', $request->universite_id);
+        }
+
+        if ($request->has('etablissement_id')) {
+            $query->where('etablissement_id', $request->etablissement_id);
+        }
+
+        if ($request->has('corps')) {
+            $query->where('corps', $request->corps);
+        }
+
+        if ($request->has('categorie')) {
+            $query->where('categorie', $request->categorie);
+        }
+
+        // Pas de pagination - retourne tout
+        return response()->json($query->get());
     }
 
     /**
@@ -72,12 +108,15 @@ class EnseignantController extends Controller
             'etablissement_id' => 'required|exists:etablissements,id',
             'nom' => 'required|string|max:255',
             'sexe' => 'required|in:M,F',
-            'im' => 'required|string|size:6',
+            'im' => 'required|string|size:6|unique:enseignants,im',
             'date_naissance' => 'required|date',
             'corps' => 'required|string',
             'diplome' => 'required|string',
             'specialite' => 'required|string',
             'categorie' => 'required|string'
+        ], [
+            'im.unique' => 'Cet IM existe déjà dans la base de données.',
+            'im.size' => 'L\'IM doit comporter exactement 6 chiffres.',
         ]);
 
         if ($validator->fails()) {
@@ -105,12 +144,15 @@ class EnseignantController extends Controller
             'etablissement_id' => 'sometimes|exists:etablissements,id',
             'nom' => 'sometimes|string|max:255',
             'sexe' => 'sometimes|in:M,F',
-            'im' => 'sometimes|string|size:6',
+            'im' => 'sometimes|string|size:6|unique:enseignants,im,' . $id,
             'date_naissance' => 'sometimes|date',
             'corps' => 'sometimes|string',
             'diplome' => 'sometimes|string',
             'specialite' => 'sometimes|string',
             'categorie' => 'sometimes|string'
+        ], [
+            'im.unique' => 'Cet IM existe déjà dans la base de données.',
+            'im.size' => 'L\'IM doit comporter exactement 6 chiffres.',
         ]);
 
         if ($validator->fails()) {
@@ -178,16 +220,16 @@ class EnseignantController extends Controller
                 return $query->where('universite_id', $universiteId);
             })
             ->selectRaw('
-            etablissement_id,
-            COUNT(*) as total,
-            SUM(CASE WHEN corps = "AES" THEN 1 ELSE 0 END) as AES,
-            SUM(CASE WHEN corps = "MC" THEN 1 ELSE 0 END) as MC,
-            SUM(CASE WHEN corps = "PES" THEN 1 ELSE 0 END) as PES,
-            SUM(CASE WHEN corps = "PT" THEN 1 ELSE 0 END) as PT,
-            SUM(CASE WHEN corps = "PE" THEN 1 ELSE 0 END) as PE,
-            SUM(CASE WHEN sexe = "F" THEN 1 ELSE 0 END) as F,
-            SUM(CASE WHEN sexe = "M" THEN 1 ELSE 0 END) as M
-        ')
+                etablissement_id,
+                COUNT(*) as total,
+                SUM(CASE WHEN corps = "AES" THEN 1 ELSE 0 END) as AES,
+                SUM(CASE WHEN corps = "MC" THEN 1 ELSE 0 END) as MC,
+                SUM(CASE WHEN corps = "PES" THEN 1 ELSE 0 END) as PES,
+                SUM(CASE WHEN corps = "PT" THEN 1 ELSE 0 END) as PT,
+                SUM(CASE WHEN corps = "PE" THEN 1 ELSE 0 END) as PE,
+                SUM(CASE WHEN sexe = "F" THEN 1 ELSE 0 END) as F,
+                SUM(CASE WHEN sexe = "M" THEN 1 ELSE 0 END) as M
+            ')
             ->groupBy('etablissement_id')
             ->get()
             ->map(function($stat) {
@@ -196,6 +238,106 @@ class EnseignantController extends Controller
             });
 
         return response()->json($stats);
+    }
+
+    /**
+     * ✅ AJOUT: Recherche globale (utilisé pour la vue publique)
+     */
+    public function searchGlobal(Request $request)
+    {
+        $query = Enseignant::with(['universite', 'etablissement']);
+        
+        // Filtres optionnels
+        if ($request->has('universite_id')) {
+            $query->where('universite_id', $request->universite_id);
+        }
+        
+        if ($request->has('etablissement_id')) {
+            $query->where('etablissement_id', $request->etablissement_id);
+        }
+        
+        if ($request->has('corps')) {
+            $query->where('corps', $request->corps);
+        }
+        
+        if ($request->has('categorie')) {
+            $query->where('categorie', $request->categorie);
+        }
+        
+        if ($request->has('diplome')) {
+            $query->where('diplome', $request->diplome);
+        }
+        
+        // ✅ Recherche multi-champs insensible à la casse
+        if ($request->has('search') && !empty($request->search)) {
+            $searchTerm = strtolower($request->search);
+            $query->where(function($q) use ($searchTerm) {
+                $q->whereRaw('LOWER(nom) LIKE ?', ['%' . $searchTerm . '%'])
+                  ->orWhereRaw('LOWER(im) LIKE ?', ['%' . $searchTerm . '%'])
+                  ->orWhereRaw('LOWER(diplome) LIKE ?', ['%' . $searchTerm . '%'])
+                  ->orWhereRaw('LOWER(specialite) LIKE ?', ['%' . $searchTerm . '%'])
+                  ->orWhereRaw('LOWER(corps) LIKE ?', ['%' . $searchTerm . '%'])
+                  ->orWhereRaw('LOWER(categorie) LIKE ?', ['%' . $searchTerm . '%']);
+            });
+        }
+        
+        // Pagination avec plus d'éléments pour la vue publique
+        $perPage = $request->get('per_page', 1000);
+        return $query->paginate($perPage);
+    }
+
+    /**
+     * ✅ AJOUT: Compter le nombre total d'enseignants (pour statistiques)
+     */
+    public function count(Request $request)
+    {
+        $query = Enseignant::query();
+        
+        if ($request->has('universite_id')) {
+            $query->where('universite_id', $request->universite_id);
+        }
+        
+        if ($request->has('etablissement_id')) {
+            $query->where('etablissement_id', $request->etablissement_id);
+        }
+        
+        if ($request->has('corps')) {
+            $query->where('corps', $request->corps);
+        }
+        
+        if ($request->has('categorie')) {
+            $query->where('categorie', $request->categorie);
+        }
+        
+        $count = $query->count();
+        
+        return response()->json([
+            'count' => $count,
+            'filters' => $request->all()
+        ]);
+    }
+
+    /**
+     * ✅ AJOUT: Récupérer les corps et catégories disponibles
+     */
+    public function getMetadata(Request $request)
+    {
+        $query = Enseignant::query();
+        
+        if ($request->has('universite_id')) {
+            $query->where('universite_id', $request->universite_id);
+        }
+        
+        $corps = $query->distinct()->pluck('corps')->filter()->values();
+        $categories = $query->distinct()->pluck('categorie')->filter()->values();
+        $diplomes = $query->distinct()->pluck('diplome')->filter()->values();
+        
+        return response()->json([
+            'corps' => $corps,
+            'categories' => $categories,
+            'diplomes' => $diplomes,
+            'total' => $query->count()
+        ]);
     }
 
     /**
@@ -223,5 +365,7 @@ class EnseignantController extends Controller
             'message' => 'Export disponible prochainement'
         ]);
     }
+
+    
 
 }

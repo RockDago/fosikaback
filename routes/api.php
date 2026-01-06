@@ -36,18 +36,27 @@ Route::get('/health', fn() => response()->json([
 // =========================================
 // ✅ ROUTES PUBLIQUES POUR LES ENSEIGNANTS (VISITEURS)
 // =========================================
-Route::post('/chats/admin/create', [ChatController::class, 'createAdminChat']);
 
-// Marquer les messages du support comme lus (pour visiteurs)
-Route::post('/chats/public/{id}/mark-read', [ChatController::class, 'markPublicAsRead']);
-
+// ✅ AJOUT: Routes publiques complètes pour les enseignants
 Route::prefix('enseignants')->group(function () {
-    // Liste des enseignants avec filtres et pagination (PUBLIC)
+    // ✅ Liste des enseignants avec filtres et pagination (PUBLIC)
     Route::get('/', [EnseignantController::class, 'index']);
-
+    
+    // ✅ AJOUT: Récupérer TOUS les enseignants sans pagination
+    Route::get('/all', [EnseignantController::class, 'getAll']);
+    
+    // ✅ AJOUT: Recherche globale multi-champs
+    Route::get('/search', [EnseignantController::class, 'searchGlobal']);
+    
+    // ✅ AJOUT: Compter les enseignants
+    Route::get('/count', [EnseignantController::class, 'count']);
+    
+    // ✅ AJOUT: Récupérer les métadonnées (corps, catégories, diplômes)
+    Route::get('/metadata', [EnseignantController::class, 'getMetadata']);
+    
     // Détails d'un enseignant (PUBLIC)
     Route::get('/{id}', [EnseignantController::class, 'show']);
-
+    
     // Statistiques par établissement (PUBLIC)
     Route::get('/statistiques/global', [EnseignantController::class, 'statistiques']);
     Route::get('/statistiques/par-etablissement', [EnseignantController::class, 'statistiquesParEtablissement']);
@@ -56,7 +65,10 @@ Route::prefix('enseignants')->group(function () {
 Route::prefix('universites')->group(function () {
     // Liste des universités (PUBLIC)
     Route::get('/', [UniversiteController::class, 'index']);
-
+    
+    // ✅ AJOUT: Récupérer toutes les universités sans pagination
+    Route::get('/all', [UniversiteController::class, 'getAll']);
+    
     // Détails d'une université (PUBLIC)
     Route::get('/{id}', [UniversiteController::class, 'show']);
 });
@@ -64,10 +76,22 @@ Route::prefix('universites')->group(function () {
 Route::prefix('etablissements')->group(function () {
     // Liste des établissements (PUBLIC)
     Route::get('/', [EtablissementController::class, 'index']);
-
+    
+    // ✅ AJOUT: Récupérer tous les établissements sans pagination
+    Route::get('/all', [EtablissementController::class, 'getAll']);
+    
+    // ✅ AJOUT: Récupérer les établissements par université
+    Route::get('/by-universite/{universiteId}', [EtablissementController::class, 'getByUniversite']);
+    
     // Détails d'un établissement (PUBLIC)
     Route::get('/{id}', [EtablissementController::class, 'show']);
 });
+
+// ✅ ROUTES CHAT PUBLIQUES
+Route::post('/chats/admin/create', [ChatController::class, 'createAdminChat']);
+
+// Marquer les messages du support comme lus (pour visiteurs)
+Route::post('/chats/public/{id}/mark-read', [ChatController::class, 'markPublicAsRead']);
 
 // ============================================
 // ✅ ROUTES PUBLIQUES CHAT (SANS AUTHENTIFICATION)
@@ -609,6 +633,34 @@ Route::fallback(fn() => response()->json([
     'success' => false,
     'message' => 'Route non trouvée',
     'available_routes' => [
+        // Routes publiques - Enseignants
+        'GET /api/enseignants' => 'Liste enseignants avec pagination (PUBLIC)',
+        'GET /api/enseignants/all' => 'Tous les enseignants sans pagination (PUBLIC)',
+        'GET /api/enseignants/search' => 'Recherche globale enseignants (PUBLIC)',
+        'GET /api/enseignants/count' => 'Compter enseignants (PUBLIC)',
+        'GET /api/enseignants/metadata' => 'Métadonnées enseignants (PUBLIC)',
+        'GET /api/enseignants/{id}' => 'Détails enseignant (PUBLIC)',
+        'GET /api/enseignants/statistiques/global' => 'Statistiques globales (PUBLIC)',
+        'GET /api/enseignants/statistiques/par-etablissement' => 'Statistiques par établissement (PUBLIC)',
+        
+        // Routes publiques - Universités
+        'GET /api/universites' => 'Liste universités (PUBLIC)',
+        'GET /api/universites/all' => 'Toutes les universités sans pagination (PUBLIC)',
+        'GET /api/universites/{id}' => 'Détails université (PUBLIC)',
+        
+        // Routes publiques - Établissements
+        'GET /api/etablissements' => 'Liste établissements (PUBLIC)',
+        'GET /api/etablissements/all' => 'Tous les établissements sans pagination (PUBLIC)',
+        'GET /api/etablissements/by-universite/{id}' => 'Établissements par université (PUBLIC)',
+        'GET /api/etablissements/{id}' => 'Détails établissement (PUBLIC)',
+        
+        // Routes protégées Admin - Enseignants
+        'POST /api/admin/enseignants' => 'Créer enseignant (ADMIN + 2FA)',
+        'PUT /api/admin/enseignants/{id}' => 'Modifier enseignant (ADMIN + 2FA)',
+        'DELETE /api/admin/enseignants/{id}' => 'Supprimer enseignant (ADMIN + 2FA)',
+        'POST /api/admin/enseignants/import' => 'Importer enseignants (ADMIN + 2FA)',
+        'GET /api/admin/enseignants/export' => 'Exporter enseignants (ADMIN + 2FA)',
+        
         // Routes publiques - Fichiers Chat
         'GET /api/chat-files/public/{filename}' => 'Servir fichiers chat sans auth (PUBLIC)',
 
