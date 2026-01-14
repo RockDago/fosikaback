@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class Report extends Model
 {
@@ -21,7 +22,7 @@ class Report extends Model
         'workflow',
         'accept_terms',
         'accept_truth',
-          'assigned_to'// ✅ AJOUTER cette ligne
+        'assigned_to'
     ];
 
     protected $casts = [
@@ -36,11 +37,6 @@ class Report extends Model
     /**
      * Relations
      */
-     /**
-     * ✅ AJOUTER cette relation
-     */
-
-
     public function workflowLogs()
     {
         return $this->hasMany(WorkflowLog::class);
@@ -175,40 +171,43 @@ class Report extends Model
         $this->update(['workflow' => $workflowData]);
     }
 
-    /**
-     * Générer une référence unique pour le signalement
-     */
-  public static function generateReference()
-{
-    // Format date: jjmmyyyy (ex: 17122025)
-    $dateStr = now()->format('dmY');
-
-    // Prefix fixe demandé
-    $fixedPrefix = "REF-{$dateStr}-FSK";
-
-    // Chercher la dernière référence (peu importe la date) avec le motif REF-XXXXXXXX-FSK####
-    // => compteur global qui ne reset jamais
-    $lastReport = self::where('reference', 'LIKE', 'REF-%-FSK%')
-        ->orderBy('reference', 'desc')
-        ->lockForUpdate()
-        ->first();
-
-    $nextNumber = 1;
-
-    if ($lastReport && $lastReport->reference) {
-        // Extraire les 3 derniers chiffres (ou plus si tu changes la longueur)
-        if (preg_match('/FSK(\d+)$/', $lastReport->reference, $matches)) {
-            $lastNumber = (int) $matches[1];
-            $nextNumber = $lastNumber + 1;
-        }
+    public static function generateReference()
+    {
+        // Format date: jjmmyyyy (ex: 17122025)
+        $dateStr = now()->format('dmY');
+        
+        // Prefix fixe demandé
+        $fixedPrefix = "REF-{$dateStr}-FSK";
+        
+        // Utiliser une transaction pour éviter les doublons en production
+        return DB::transaction(function () use ($fixedPrefix) {
+            // Récupérer toutes les références avec ce motif
+            $lastReports = self::where('reference', 'LIKE', 'REF-%-FSK%')
+                ->whereNotNull('reference')
+                ->pluck('reference')
+                ->toArray();
+            
+            $maxNumber = 0;
+            
+            // Extraire le plus grand numéro (comparaison numérique, pas alphabétique)
+            foreach ($lastReports as $ref) {
+                if (preg_match('/FSK(\d+)$/', $ref, $matches)) {
+                    $number = (int) $matches[1];
+                    if ($number > $maxNumber) {
+                        $maxNumber = $number;
+                    }
+                }
+            }
+            
+            $nextNumber = $maxNumber + 1;
+            
+            // Format sur 3 chiffres minimum (extensible automatiquement)
+            // FSK001...FSK999 puis FSK1000, FSK1001... (illimité)
+            $formattedNumber = str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+            
+            return "{$fixedPrefix}{$formattedNumber}";
+        });
     }
-
-    // 3 chiffres: 001, 002, ...
-    $formattedNumber = str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
-
-    return "{$fixedPrefix}{$formattedNumber}";
-}
-
 
     /**
      * Générer un préfixe aléatoire (1 lettre + 1 chiffre)
@@ -221,32 +220,31 @@ class Report extends Model
         return $letters[rand(0, 25)] . $numbers[rand(0, 9)];
     }
 
-
     /**
      * Obtenir le label du statut dans une langue donnée
      * ✅ SUPPORT de 'classifier'
      */
-public function getStatusLabel($language = 'fr')
-{
-    $statuses = [
-        'fr' => [
-            'traitement_classification' => 'Traitement et Classification',
-            'investigation' => 'Investigation',
-            'transmis_autorite' => 'Transmis aux autorités compétentes',
-            'refuse' => 'Refusé',
-            'classifier' => 'Classifié'
-        ],
-        'mg' => [
-            'traitement_classification' => 'Fanodinana sy Fanasokajiana',
-            'investigation' => 'Fanadihadiana',
-            'transmis_autorite' => 'Nalefa tany amin\'ny manam-pahefana',
-            'refuse' => 'Nolavina',
-            'classifier' => 'Voasokajy'
-        ]
-    ];
+    public function getStatusLabel($language = 'fr')
+    {
+        $statuses = [
+            'fr' => [
+                'traitement_classification' => 'Traitement et Classification',
+                'investigation' => 'Investigation',
+                'transmis_autorite' => 'Transmis aux autorités compétentes',
+                'refuse' => 'Refusé',
+                'classifier' => 'Classifié'
+            ],
+            'mg' => [
+                'traitement_classification' => 'Fanodinana sy Fanasokajiana',
+                'investigation' => 'Fanadihadiana',
+                'transmis_autorite' => 'Nalefa tany amin\'ny manam-pahefana',
+                'refuse' => 'Nolavina',
+                'classifier' => 'Voasokajy'
+            ]
+        ];
 
-    return $statuses[$language][$this->status] ?? $this->status;
-}
+        return $statuses[$language][$this->status] ?? $this->status;
+    }
 
     /**
      * Obtenir les statuts possibles suivants selon le statut actuel
@@ -372,164 +370,161 @@ public function getStatusLabel($language = 'fr')
         return !empty($this->files) && is_array($this->files) && count($this->files) > 0;
     }
 
-/**
- * Mettre à jour le workflow en fonction du statut simplifié
- */
-/**
- * Mettre à jour le workflow en fonction du statut simplifié
- */
-public function updateWorkflowFromStatus($newStatus)
-{
-    try {
-        $workflow = $this->workflow ?? [];
+    /**
+     * Mettre à jour le workflow en fonction du statut simplifié
+     */
+    public function updateWorkflowFromStatus($newStatus)
+    {
+        try {
+            $workflow = $this->workflow ?? [];
 
-        switch ($newStatus) {
-            case 'traitement_classification':
-                $workflow['drse'] = [
-                    'date' => now()->toDateTimeString(),
-                    'status' => 'in_progress',
-                    'progress' => 33,
-                    'agent' => 'DAAQ / DRSE'
-                ];
-                $workflow['cac'] = [
-                    'date' => null,
-                    'status' => 'pending',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / CAC / DAJ'
-                ];
-                $workflow['bianco'] = [
-                    'date' => null,
-                    'status' => 'pending',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / BIANCO'
-                ];
-                break;
+            switch ($newStatus) {
+                case 'traitement_classification':
+                    $workflow['drse'] = [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 33,
+                        'agent' => 'DAAQ / DRSE'
+                    ];
+                    $workflow['cac'] = [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ];
+                    $workflow['bianco'] = [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ];
+                    break;
 
-            case 'investigation':
-                $workflow['drse'] = [
-                    'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / DRSE'
-                ];
-                $workflow['cac'] = [
-                    'date' => now()->toDateTimeString(),
-                    'status' => 'in_progress',
-                    'progress' => 66,
-                    'agent' => 'DAAQ / CAC / DAJ'
-                ];
-                $workflow['bianco'] = [
-                    'date' => null,
-                    'status' => 'pending',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / BIANCO'
-                ];
-                break;
+                case 'investigation':
+                    $workflow['drse'] = [
+                        'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ];
+                    $workflow['cac'] = [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 66,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ];
+                    $workflow['bianco'] = [
+                        'date' => null,
+                        'status' => 'pending',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ];
+                    break;
 
-            case 'transmis_autorite':
-                $workflow['drse'] = [
-                    'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / DRSE'
-                ];
-                $workflow['cac'] = [
-                    'date' => $workflow['cac']['date'] ?? now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / CAC / DAJ'
-                ];
-                $workflow['bianco'] = [
-                    'date' => now()->toDateTimeString(),
-                    'status' => 'in_progress',
-                    'progress' => 66,
-                    'agent' => 'DAAQ / BIANCO'
-                ];
-                break;
+                case 'transmis_autorite':
+                    $workflow['drse'] = [
+                        'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ];
+                    $workflow['cac'] = [
+                        'date' => $workflow['cac']['date'] ?? now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ];
+                    $workflow['bianco'] = [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'in_progress',
+                        'progress' => 66,
+                        'agent' => 'DAAQ / BIANCO'
+                    ];
+                    break;
 
-            case 'classifier':
-                $workflow['drse'] = [
-                    'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / DRSE'
-                ];
-                $workflow['cac'] = [
-                    'date' => $workflow['cac']['date'] ?? now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / CAC / DAJ'
-                ];
-                $workflow['bianco'] = [
-                    'date' => now()->toDateTimeString(),
-                    'status' => 'completed',
-                    'progress' => 100,
-                    'agent' => 'DAAQ / BIANCO'
-                ];
-                break;
+                case 'classifier':
+                    $workflow['drse'] = [
+                        'date' => $workflow['drse']['date'] ?? now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / DRSE'
+                    ];
+                    $workflow['cac'] = [
+                        'date' => $workflow['cac']['date'] ?? now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ];
+                    $workflow['bianco'] = [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'completed',
+                        'progress' => 100,
+                        'agent' => 'DAAQ / BIANCO'
+                    ];
+                    break;
 
-            case 'refuse':
-                $workflow['drse'] = [
-                    'date' => now()->toDateTimeString(),
-                    'status' => 'rejected',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / DRSE'
-                ];
-                $workflow['cac'] = [
-                    'date' => null,
-                    'status' => 'not_required',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / CAC / DAJ'
-                ];
-                $workflow['bianco'] = [
-                    'date' => null,
-                    'status' => 'not_required',
-                    'progress' => 0,
-                    'agent' => 'DAAQ / BIANCO'
-                ];
-                break;
-        }
+                case 'refuse':
+                    $workflow['drse'] = [
+                        'date' => now()->toDateTimeString(),
+                        'status' => 'rejected',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / DRSE'
+                    ];
+                    $workflow['cac'] = [
+                        'date' => null,
+                        'status' => 'not_required',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / CAC / DAJ'
+                    ];
+                    $workflow['bianco'] = [
+                        'date' => null,
+                        'status' => 'not_required',
+                        'progress' => 0,
+                        'agent' => 'DAAQ / BIANCO'
+                    ];
+                    break;
+            }
 
-        // Mettre à jour uniquement le champ workflow sans toucher updated_at
-        $this->workflow = $workflow;
-        $this->save();
+            // Mettre à jour uniquement le champ workflow sans toucher updated_at
+            $this->workflow = $workflow;
+            $this->save();
 
-        // Mettre à jour aussi les WorkflowLogs
-        $this->updateWorkflowLogs($newStatus);
+            // Mettre à jour aussi les WorkflowLogs
+            $this->updateWorkflowLogs($newStatus);
 
-        return true;
+            return true;
 
-    } catch (\Exception $e) {
-        Log::error("Erreur updateWorkflowFromStatus: " . $e->getMessage());
-        throw $e;
-    }
-}
-
-/**
- * Mettre à jour les logs de workflow
- */
-protected function updateWorkflowLogs($status)
-{
-    $workflow = $this->workflow;
-
-    foreach ($workflow as $step => $data) {
-        $log = $this->workflowLogs()->where('step', strtoupper($step))->first();
-
-        if ($log) {
-            $log->update([
-                'status' => $data['status'],
-                'processed_at' => $data['date'] ? now()->parse($data['date']) : null,
-                'agent' => $data['agent']
-            ]);
-        } else {
-            WorkflowLog::create([
-                'report_id' => $this->id,
-                'step' => strtoupper($step),
-                'status' => $data['status'],
-                'agent' => $data['agent'],
-                'processed_at' => $data['date'] ? now()->parse($data['date']) : null
-            ]);
+        } catch (\Exception $e) {
+            Log::error("Erreur updateWorkflowFromStatus: " . $e->getMessage());
+            throw $e;
         }
     }
-}
+
+    /**
+     * Mettre à jour les logs de workflow
+     */
+    protected function updateWorkflowLogs($status)
+    {
+        $workflow = $this->workflow;
+
+        foreach ($workflow as $step => $data) {
+            $log = $this->workflowLogs()->where('step', strtoupper($step))->first();
+
+            if ($log) {
+                $log->update([
+                    'status' => $data['status'],
+                    'processed_at' => $data['date'] ? now()->parse($data['date']) : null,
+                    'agent' => $data['agent']
+                ]);
+            } else {
+                WorkflowLog::create([
+                    'report_id' => $this->id,
+                    'step' => strtoupper($step),
+                    'status' => $data['status'],
+                    'agent' => $data['agent'],
+                    'processed_at' => $data['date'] ? now()->parse($data['date']) : null
+                ]);
+            }
+        }
+    }
 }

@@ -6,9 +6,27 @@ use App\Http\Controllers\Controller;
 use App\Models\Enseignant;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class EnseignantController extends Controller
 {
+    /**
+     * Mapping entre corps et catégorie (titre)
+     */
+    private function getCategoriFromCorps($corps)
+    {
+        $mapping = [
+            'AES' => 'ASSISTANT D\'ENSEIGNEMENT SUPERIEUR',
+            'MC' => 'MAÎTRE DE CONFÉRENCES D\'ENSEIGNEMENT SUPERIEUR',
+            'PES' => 'PROFESSEUR D\'ENSEIGNEMENT SUPERIEUR',
+            'PE' => 'PROFESSEUR ÉMÉRITE',
+            'PT' => 'PROFESSEUR TITULAIRE',
+        ];
+
+        return $mapping[strtoupper($corps)] ?? null;
+    }
+
     /**
      * Récupérer tous les enseignants avec filtres et pagination
      */
@@ -41,7 +59,7 @@ class EnseignantController extends Controller
             $query->where('sexe', $request->sexe);
         }
 
-        // ✅ CORRECTION: Recherche avancée dans MULTIPLES champs
+        // Recherche avancée dans MULTIPLES champs
         if ($request->has('search') && $request->search != '') {
             $searchTerm = $request->search;
             $query->where(function($q) use ($searchTerm) {
@@ -54,15 +72,19 @@ class EnseignantController extends Controller
             });
         }
 
-        // ✅ CORRECTION: Augmenter le per_page par défaut pour éviter les problèmes
-        $perPage = $request->get('per_page', 100); // Augmenté à 100 par défaut
+        // Tri par défaut par nom
+        $sortBy = $request->get('sort_by', 'nom');
+        $sortOrder = $request->get('sort_order', 'asc');
+        $query->orderBy($sortBy, $sortOrder);
+
+        $perPage = $request->get('per_page', 100);
         $enseignants = $query->paginate($perPage);
 
         return response()->json($enseignants);
     }
 
     /**
-     * ✅ AJOUT: Récupérer TOUS les enseignants sans pagination (pour export/filtrage côté client)
+     * Récupérer TOUS les enseignants sans pagination (pour export/filtrage côté client)
      */
     public function getAll(Request $request)
     {
@@ -85,7 +107,9 @@ class EnseignantController extends Controller
             $query->where('categorie', $request->categorie);
         }
 
-        // Pas de pagination - retourne tout
+        // Tri par défaut
+        $query->orderBy('nom', 'asc');
+
         return response()->json($query->get());
     }
 
@@ -103,33 +127,96 @@ class EnseignantController extends Controller
      */
     public function store(Request $request)
     {
+        Log::info('Tentative de création enseignant:', $request->all());
+
         $validator = Validator::make($request->all(), [
-            'universite_id' => 'required|exists:universites,id',
-            'etablissement_id' => 'required|exists:etablissements,id',
+            'universite_id' => 'required|integer|exists:universites,id',
+            'etablissement_id' => 'required|integer|exists:etablissements,id',
             'nom' => 'required|string|max:255',
             'sexe' => 'required|in:M,F',
             'im' => 'required|string|size:6|unique:enseignants,im',
-            'date_naissance' => 'required|date',
-            'corps' => 'required|string',
-            'diplome' => 'required|string',
-            'specialite' => 'required|string',
-            'categorie' => 'required|string'
+            'date_naissance' => 'required|date|before:today',
+            'corps' => 'required|string|in:AES,MC,PE,PES,PT',
+            'diplome' => 'required|string|max:255',
+            'specialite' => 'required|string|max:255',
+            'categorie' => 'nullable|string|max:255'
         ], [
-            'im.unique' => 'Cet IM existe déjà dans la base de données.',
+            'universite_id.required' => 'L\'université est obligatoire.',
+            'universite_id.exists' => 'L\'université sélectionnée n\'existe pas.',
+            'etablissement_id.required' => 'L\'établissement est obligatoire.',
+            'etablissement_id.exists' => 'L\'établissement sélectionné n\'existe pas.',
+            'nom.required' => 'Le nom est obligatoire.',
+            'nom.max' => 'Le nom ne doit pas dépasser 255 caractères.',
+            'sexe.required' => 'Le sexe est obligatoire.',
+            'sexe.in' => 'Le sexe doit être M ou F.',
+            'im.required' => 'L\'IM est obligatoire.',
             'im.size' => 'L\'IM doit comporter exactement 6 chiffres.',
+            'im.unique' => 'Cet IM existe déjà dans la base de données.',
+            'date_naissance.required' => 'La date de naissance est obligatoire.',
+            'date_naissance.date' => 'La date de naissance doit être une date valide.',
+            'date_naissance.before' => 'La date de naissance doit être antérieure à aujourd\'hui.',
+            'corps.required' => 'Le corps est obligatoire.',
+            'corps.in' => 'Le corps doit être AES, MC, PE, PES ou PT.',
+            'diplome.required' => 'Le diplôme est obligatoire.',
+            'diplome.max' => 'Le diplôme ne doit pas dépasser 255 caractères.',
+            'specialite.required' => 'La spécialité est obligatoire.',
+            'specialite.max' => 'La spécialité ne doit pas dépasser 255 caractères.',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
+            Log::error('Erreur de validation enseignant:', $validator->errors()->toArray());
+            return response()->json([
+                'message' => 'Erreur de validation',
+                'errors' => $validator->errors()
+            ], 422);
         }
 
-        $enseignant = Enseignant::create($request->all());
-        $enseignant->load(['universite', 'etablissement']);
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Enseignant créé avec succès',
-            'data' => $enseignant
-        ], 201);
+            $corps = strtoupper(trim($request->corps));
+            
+            // ✅ CORRECTION: Si catégorie n'est pas fournie ou vide, déduire du corps
+            $categorie = $request->categorie;
+            if (empty($categorie)) {
+                $categorie = $this->getCategoriFromCorps($corps);
+            }
+
+            $enseignant = Enseignant::create([
+                'universite_id' => $request->universite_id,
+                'etablissement_id' => $request->etablissement_id,
+                'nom' => trim($request->nom),
+                'sexe' => strtoupper($request->sexe),
+                'im' => trim($request->im),
+                'date_naissance' => $request->date_naissance,
+                'corps' => $corps,
+                'diplome' => trim($request->diplome),
+                'specialite' => trim($request->specialite),
+                'categorie' => trim($categorie)
+            ]);
+
+            $enseignant->load(['universite', 'etablissement']);
+
+            DB::commit();
+
+            Log::info('Enseignant créé avec succès:', ['id' => $enseignant->id, 'nom' => $enseignant->nom]);
+
+            return response()->json([
+                'message' => 'Enseignant créé avec succès',
+                'data' => $enseignant
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Erreur création enseignant: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'message' => 'Erreur lors de la création de l\'enseignant',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -139,33 +226,106 @@ class EnseignantController extends Controller
     {
         $enseignant = Enseignant::findOrFail($id);
 
+        Log::info('Tentative de modification enseignant:', ['id' => $id, 'data' => $request->all()]);
+
         $validator = Validator::make($request->all(), [
-            'universite_id' => 'sometimes|exists:universites,id',
-            'etablissement_id' => 'sometimes|exists:etablissements,id',
+            'universite_id' => 'sometimes|integer|exists:universites,id',
+            'etablissement_id' => 'sometimes|integer|exists:etablissements,id',
             'nom' => 'sometimes|string|max:255',
             'sexe' => 'sometimes|in:M,F',
             'im' => 'sometimes|string|size:6|unique:enseignants,im,' . $id,
-            'date_naissance' => 'sometimes|date',
-            'corps' => 'sometimes|string',
-            'diplome' => 'sometimes|string',
-            'specialite' => 'sometimes|string',
-            'categorie' => 'sometimes|string'
+            'date_naissance' => 'sometimes|date|before:today',
+            'corps' => 'sometimes|string|in:AES,MC,PE,PES,PT',
+            'diplome' => 'sometimes|string|max:255',
+            'specialite' => 'sometimes|string|max:255',
+            'categorie' => 'nullable|string|max:255'
         ], [
             'im.unique' => 'Cet IM existe déjà dans la base de données.',
             'im.size' => 'L\'IM doit comporter exactement 6 chiffres.',
+            'date_naissance.before' => 'La date de naissance doit être antérieure à aujourd\'hui.',
+            'corps.in' => 'Le corps doit être AES, MC, PE, PES ou PT.',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
+            Log::error('Erreur de validation modification:', $validator->errors()->toArray());
+            return response()->json([
+                'message' => 'Erreur de validation',
+                'errors' => $validator->errors()
+            ], 422);
         }
 
-        $enseignant->update($request->all());
-        $enseignant->load(['universite', 'etablissement']);
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Enseignant mis à jour avec succès',
-            'data' => $enseignant
-        ]);
+            $dataToUpdate = [];
+            
+            if ($request->has('nom')) {
+                $dataToUpdate['nom'] = trim($request->nom);
+            }
+            if ($request->has('sexe')) {
+                $dataToUpdate['sexe'] = strtoupper($request->sexe);
+            }
+            if ($request->has('im')) {
+                $dataToUpdate['im'] = trim($request->im);
+            }
+            if ($request->has('date_naissance')) {
+                $dataToUpdate['date_naissance'] = $request->date_naissance;
+            }
+            
+            // ✅ CORRECTION: Synchroniser automatiquement categorie quand corps change
+            if ($request->has('corps')) {
+                $corps = strtoupper(trim($request->corps));
+                $dataToUpdate['corps'] = $corps;
+                
+                // Si catégorie n'est pas fournie, la déduire du nouveau corps
+                if (!$request->has('categorie') || empty($request->categorie)) {
+                    $dataToUpdate['categorie'] = $this->getCategoriFromCorps($corps);
+                }
+            }
+            
+            // Si catégorie est fournie explicitement, l'utiliser
+            if ($request->has('categorie') && !empty($request->categorie)) {
+                $dataToUpdate['categorie'] = trim($request->categorie);
+            }
+            
+            if ($request->has('diplome')) {
+                $dataToUpdate['diplome'] = trim($request->diplome);
+            }
+            if ($request->has('specialite')) {
+                $dataToUpdate['specialite'] = trim($request->specialite);
+            }
+            if ($request->has('universite_id')) {
+                $dataToUpdate['universite_id'] = $request->universite_id;
+            }
+            if ($request->has('etablissement_id')) {
+                $dataToUpdate['etablissement_id'] = $request->etablissement_id;
+            }
+
+            $enseignant->update($dataToUpdate);
+            $enseignant->load(['universite', 'etablissement']);
+
+            DB::commit();
+
+            Log::info('Enseignant modifié avec succès:', [
+                'id' => $id, 
+                'corps' => $dataToUpdate['corps'] ?? 'non modifié',
+                'categorie' => $dataToUpdate['categorie'] ?? 'non modifié'
+            ]);
+
+            return response()->json([
+                'message' => 'Enseignant mis à jour avec succès',
+                'data' => $enseignant
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Erreur modification enseignant: ' . $e->getMessage());
+            
+            return response()->json([
+                'message' => 'Erreur lors de la modification de l\'enseignant',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -173,12 +333,26 @@ class EnseignantController extends Controller
      */
     public function destroy($id)
     {
-        $enseignant = Enseignant::findOrFail($id);
-        $enseignant->delete();
+        try {
+            $enseignant = Enseignant::findOrFail($id);
+            $nom = $enseignant->nom;
+            
+            $enseignant->delete();
 
-        return response()->json([
-            'message' => 'Enseignant supprimé avec succès'
-        ]);
+            Log::info('Enseignant supprimé avec succès:', ['id' => $id, 'nom' => $nom]);
+
+            return response()->json([
+                'message' => 'Enseignant supprimé avec succès'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur suppression enseignant: ' . $e->getMessage());
+            
+            return response()->json([
+                'message' => 'Erreur lors de la suppression de l\'enseignant',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -199,6 +373,7 @@ class EnseignantController extends Controller
                 SUM(CASE WHEN corps = "MC" THEN 1 ELSE 0 END) as MC,
                 SUM(CASE WHEN corps = "PES" THEN 1 ELSE 0 END) as PES,
                 SUM(CASE WHEN corps = "PT" THEN 1 ELSE 0 END) as PT,
+                SUM(CASE WHEN corps = "PE" THEN 1 ELSE 0 END) as PE,
                 SUM(CASE WHEN sexe = "F" THEN 1 ELSE 0 END) as F,
                 SUM(CASE WHEN sexe = "M" THEN 1 ELSE 0 END) as M
             ')
@@ -241,7 +416,7 @@ class EnseignantController extends Controller
     }
 
     /**
-     * ✅ AJOUT: Recherche globale (utilisé pour la vue publique)
+     * Recherche globale (utilisé pour la vue publique)
      */
     public function searchGlobal(Request $request)
     {
@@ -268,7 +443,7 @@ class EnseignantController extends Controller
             $query->where('diplome', $request->diplome);
         }
         
-        // ✅ Recherche multi-champs insensible à la casse
+        // Recherche multi-champs insensible à la casse
         if ($request->has('search') && !empty($request->search)) {
             $searchTerm = strtolower($request->search);
             $query->where(function($q) use ($searchTerm) {
@@ -281,13 +456,16 @@ class EnseignantController extends Controller
             });
         }
         
+        // Tri
+        $query->orderBy('nom', 'asc');
+        
         // Pagination avec plus d'éléments pour la vue publique
         $perPage = $request->get('per_page', 1000);
         return $query->paginate($perPage);
     }
 
     /**
-     * ✅ AJOUT: Compter le nombre total d'enseignants (pour statistiques)
+     * Compter le nombre total d'enseignants (pour statistiques)
      */
     public function count(Request $request)
     {
@@ -318,7 +496,7 @@ class EnseignantController extends Controller
     }
 
     /**
-     * ✅ AJOUT: Récupérer les corps et catégories disponibles
+     * Récupérer les corps et catégories disponibles
      */
     public function getMetadata(Request $request)
     {
@@ -365,7 +543,4 @@ class EnseignantController extends Controller
             'message' => 'Export disponible prochainement'
         ]);
     }
-
-    
-
 }
