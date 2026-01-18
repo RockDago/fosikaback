@@ -40,7 +40,7 @@ class ReportController extends Controller
             $validator = Validator::make($request->all(), [
                 'category' => 'required|string|max:255',
                 'description' => 'required|string|min:10',
-                'files.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx,mp4|max:51200', // 50MB max
+                'files.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx,mp4|max:51200', 
                 'nom_prenom' => 'nullable|string|max:255',
                 'email' => 'nullable|email|max:255',
                 'telephone' => 'nullable|string|max:20',
@@ -535,7 +535,7 @@ class ReportController extends Controller
             $userEmail = auth()->check() ? auth()->user()->email : 'API Guest';
 
             // Journal d'audit
-            if (class_exists('App\Services\AuditLogger')) {
+            if (class_exists('App\\Services\\AuditLogger')) {
                 AuditLogger::logConsultation(
                     $userEmail,
                     'Signalements',
@@ -648,7 +648,7 @@ class ReportController extends Controller
             ], 200, [], JSON_UNESCAPED_SLASHES);
 
         } catch (\Exception $e) {
-            if (class_exists('App\Services\AuditLogger')) {
+            if (class_exists('App\\Services\\AuditLogger')) {
                 AuditLogger::logSystemAction(
                     'Système',
                     'Consultation',
@@ -817,7 +817,6 @@ class ReportController extends Controller
             return response()->json(['error' => 'Erreur lors de l\'accès au fichier'], 500);
         }
     }
-
 
     /**
      * Télécharger un fichier
@@ -1167,7 +1166,7 @@ class ReportController extends Controller
             }
 
             // ✅ JOURNALISATION
-            if (class_exists('App\Services\AuditLogger')) {
+            if (class_exists('App\\Services\\AuditLogger')) {
                 AuditLogger::logModification(
                     $userEmail,
                     'Signalement',
@@ -1242,6 +1241,7 @@ class ReportController extends Controller
             ], 500);
         }
     }
+
     /**
      * Mettre à jour une étape spécifique du workflow
      */
@@ -1775,9 +1775,6 @@ class ReportController extends Controller
     /**
      * Ajouter des fichiers à un signalement existant (route publique)
      */
-    /**
-     * Ajouter des fichiers à un signalement existant (route publique)
-     */
     public function addFilesToReport(Request $request, $reference)
     {
         \Log::info('addFilesToReport appelée', ['reference' => $reference]);
@@ -1966,6 +1963,7 @@ class ReportController extends Controller
             ], 500);
         }
     }
+
     /**
      * ✅ MÉTHODE POUR ACCÉDER AUX FICHIERS PUBLIQUES
      */
@@ -2038,6 +2036,125 @@ class ReportController extends Controller
         }
     }
 
+    /**
+     * ✅ MÉTHODE PUBLIQUE POUR TÉLÉCHARGER UN FICHIER
+     */
+    public function downloadPublicFile($filename): Response
+    {
+        try {
+            // Nettoyer le nom du fichier
+            $decodedFilename = urldecode(basename($filename));
+
+            // Vérification de sécurité
+            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+                abort(400, 'Nom de fichier invalide');
+            }
+
+            // Chercher dans plusieurs chemins possibles
+            $possiblePaths = [
+                storage_path('app/public/reports/' . $decodedFilename),
+                public_path('storage/reports/' . $decodedFilename),
+                public_path('uploads/reports/' . $decodedFilename),
+                storage_path('app/public/uploads/' . $decodedFilename),
+            ];
+
+            $filePath = null;
+            foreach ($possiblePaths as $path) {
+                if (file_exists($path)) {
+                    $filePath = $path;
+                    break;
+                }
+            }
+
+            // Si fichier non trouvé, chercher dans la base de données
+            if (!$filePath) {
+                $report = Report::where('files', 'LIKE', '%' . $decodedFilename . '%')->first();
+
+                if (!$report) {
+                    abort(404, 'Fichier non trouvé');
+                }
+
+                // Essayer de générer le fichier si possible
+                $generatedPath = $this->fileService->findOrCreateFile($decodedFilename, $report->reference);
+
+                if (!$generatedPath || !file_exists($generatedPath)) {
+                    abort(404, 'Fichier non trouvé');
+                }
+
+                $filePath = $generatedPath;
+            }
+
+            // Déterminer le type de contenu
+            $mimeType = mime_content_type($filePath);
+
+            // Retourner le fichier en téléchargement
+            return response()->download($filePath, $decodedFilename, [
+                'Content-Type' => $mimeType,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur téléchargement fichier public: ' . $e->getMessage());
+
+            if (config('app.debug')) {
+                return response()->json([
+                    'error' => 'Erreur lors du téléchargement',
+                    'message' => $e->getMessage()
+                ], 500);
+            }
+
+            abort(500, 'Erreur lors du téléchargement');
+        }
+    }
+
+    /**
+     * ✅ MÉTHODE PUBLIQUE POUR VISUALISER UN FICHIER
+     */
+    public function viewPublicFile($filename): Response
+    {
+        try {
+            // Nettoyer le nom du fichier
+            $decodedFilename = urldecode(basename($filename));
+
+            // Vérification de sécurité
+            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+                abort(400, 'Nom de fichier invalide');
+            }
+
+            // Chercher dans plusieurs chemins possibles
+            $possiblePaths = [
+                storage_path('app/public/reports/' . $decodedFilename),
+                public_path('storage/reports/' . $decodedFilename),
+                public_path('uploads/reports/' . $decodedFilename),
+                storage_path('app/public/uploads/' . $decodedFilename),
+            ];
+
+            $filePath = null;
+            foreach ($possiblePaths as $path) {
+                if (file_exists($path)) {
+                    $filePath = $path;
+                    break;
+                }
+            }
+
+            if (!$filePath) {
+                abort(404, 'Fichier non trouvé');
+            }
+
+            // Déterminer le type de contenu
+            $mimeType = mime_content_type($filePath);
+
+            // Retourner le fichier pour visualisation
+            return response()->file($filePath, [
+                'Content-Type' => $mimeType,
+                'Content-Disposition' => 'inline; filename="' . $decodedFilename . '"',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur visualisation fichier public: ' . $e->getMessage());
+            abort(500, 'Erreur lors de la visualisation');
+        }
+    }
+
     public function getAdminFile($filename)
     {
         try {
@@ -2097,8 +2214,4 @@ class ReportController extends Controller
             ], 500);
         }
     }
-
-
-
-
 }

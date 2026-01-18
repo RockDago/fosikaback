@@ -177,12 +177,21 @@ Route::post('/reports/{reference}/add-files', [ReportController::class, 'addFile
 Route::get('/reports/tracking/{reference}', [ReportController::class, 'publicTracking']);
 Route::get('/reports/tracking-old/{reference}', [ReportController::class, 'checkTracking']);
 
-// ROUTES PUBLIQUES POUR LES FICHIERS DOSSIERS (VISITEURS) - ReportController
+// =========================================
+// ✅ ROUTES PUBLIQUES POUR LES FICHIERS DOSSIERS (VISITEURS)
+// =========================================
 Route::prefix('files')->group(function () {
     // ✅ Accès aux fichiers publics des dossiers SANS auth
-    Route::get('/public/{filename}', [ReportController::class, 'getPublicFile']);
-    Route::get('/public/{filename}/download', [ReportController::class, 'downloadPublicFile']);
-    Route::get('/public/{filename}/view', [ReportController::class, 'viewPublicFile']);
+    Route::get('public/{filename}', [ReportController::class, 'getPublicFile'])
+        ->name('files.public.get');
+    
+    // ✅ Télécharger un fichier public
+    Route::get('public/{filename}/download', [ReportController::class, 'downloadPublicFile'])
+        ->name('files.public.download');
+    
+    // ✅ Visualiser un fichier public
+    Route::get('public/{filename}/view', [ReportController::class, 'viewPublicFile'])
+        ->name('files.public.view');
 });
 
 // =========================================
@@ -436,9 +445,9 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
 
     // ✅ ROUTES FILES ADMIN (nécessite 2FA)
     Route::prefix('files')->group(function () {
-        Route::get('/admin/{filename}', [ReportController::class, 'getAdminFile']);
-        Route::get('/admin/{filename}/download', [ReportController::class, 'downloadAdminFile']);
-        Route::get('/admin/{filename}/url', [ReportController::class, 'getFileUrl']);
+        Route::get('admin/{filename}', [ReportController::class, 'getAdminFile']);
+        Route::get('admin/{filename}/download', [ReportController::class, 'downloadAdminFile']);
+        Route::get('admin/{filename}/url', [ReportController::class, 'getFileUrl']);
     });
 
     Route::post('/admin/users/create-with-notification', [UserAuthController::class, 'createUserWithNotification']);
@@ -674,12 +683,18 @@ Route::fallback(fn() => response()->json([
         'GET /api/chats/{chatId}/visitor/online-status' => 'Récupérer statut visiteur (PUBLIC)',
 
         // Routes publiques - Fichiers Dossiers
-        'GET /api/files/public/{filename}' => 'Fichiers dossiers publics (PUBLIC)',
+        'GET /api/files/public/{filename}' => 'Accéder fichier dossier public (PUBLIC)',
+        'GET /api/files/public/{filename}/download' => 'Télécharger fichier dossier public (PUBLIC)',
+        'GET /api/files/public/{filename}/view' => 'Visualiser fichier dossier public (PUBLIC)',
 
         // Routes protégées - Chat (Admin/Support avec 2FA)
         'GET /api/chat' => 'Liste conversations (ADMIN/SUPPORT + 2FA)',
         'GET /api/chat/{id}' => 'Détails conversation (ADMIN/SUPPORT + 2FA)',
         'POST /api/chat/{chatId}/message' => 'Envoyer message support (ADMIN/SUPPORT + 2FA)',
         'POST /api/chat/{chatId}/upload' => 'Upload fichier (ADMIN/SUPPORT + 2FA)',
+        
+        // Routes protégées - Fichiers Admin
+        'GET /api/files/admin/{filename}' => 'Accéder fichier admin (ADMIN + 2FA)',
+        'GET /api/files/admin/{filename}/download' => 'Télécharger fichier admin (ADMIN + 2FA)',
     ],
 ], 404));
