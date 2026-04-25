@@ -183,6 +183,14 @@ Route::get('/reports/tracking-old/{reference}', [ReportController::class, 'check
 // =========================================
 // ✅ ROUTES PUBLIQUES POUR LES FICHIERS DOSSIERS (VISITEURS)
 // =========================================
+Route::get('/files/public/{filename}/download', [ReportController::class, 'downloadPublicFile'])
+    ->where('filename', '.*')
+    ->name('files.public.download.safe');
+
+Route::get('/files/public/{filename}/view', [ReportController::class, 'viewPublicFile'])
+    ->where('filename', '.*')
+    ->name('files.public.view.safe');
+
 Route::prefix('files')->group(function () {
     // ✅ Accès aux fichiers publics des dossiers SANS auth
     Route::get('public/{filename}', [ReportController::class, 'getPublicFile'])
