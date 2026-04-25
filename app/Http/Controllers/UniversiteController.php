@@ -10,7 +10,28 @@ class UniversiteController extends Controller
 {
     public function index()
     {
-        return response()->json(Universite::with('etablissements')->get());
+        try {
+            $universites = Universite::with('etablissements')->get();
+            
+            \Log::info('Universites API called', [
+                'count' => $universites->count(),
+                'first_item' => $universites->first(),
+                'user_agent' => request()->userAgent(),
+                'ip' => request()->ip(),
+            ]);
+            
+            return response()->json($universites);
+        } catch (\Exception $e) {
+            \Log::error('Error in UniversiteController@index', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            return response()->json([
+                'error' => 'Erreur lors de la récupération des universités',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function getAll()
