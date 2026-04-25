@@ -66,25 +66,37 @@ jobs:
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          SUDO_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           port: 2244
+          envs: SUDO_PASSWORD
           script_stop: true
           script: |
             set -e
 
             cd /var/www/fosikaback
 
-            mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "$USER":www-data storage bootstrap/cache || true
-              sudo chmod -R ug+rwX storage bootstrap/cache || true
-            else
-              chown -R "$USER":www-data storage bootstrap/cache || true
-              chmod -R ug+rwX storage bootstrap/cache || true
-            fi
+            run_as_root() {
+              if [ "$(id -u)" -eq 0 ]; then
+                "$@"
+              elif command -v sudo >/dev/null 2>&1; then
+                printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+              else
+                "$@"
+              fi
+            }
+
+            fix_laravel_permissions() {
+              mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
+              run_as_root chown -R "$USER":www-data storage bootstrap/cache
+              run_as_root chmod -R ug+rwX storage bootstrap/cache
+            }
+
+            fix_laravel_permissions
 
             php artisan down || true
 
@@ -103,14 +115,7 @@ jobs:
 
             git pull --ff-only origin "${{ github.ref_name }}"
 
-            mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R "$USER":www-data storage bootstrap/cache || true
-              sudo chmod -R ug+rwX storage bootstrap/cache || true
-            else
-              chown -R "$USER":www-data storage bootstrap/cache || true
-              chmod -R ug+rwX storage bootstrap/cache || true
-            fi
+            fix_laravel_permissions
 
             composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
@@ -122,14 +127,8 @@ jobs:
 
             php artisan storage:link || true
 
-            if command -v sudo >/dev/null 2>&1; then
-              sudo chown -R www-data:www-data storage bootstrap/cache || true
-              sudo find storage bootstrap/cache -type d -exec chmod 775 {} \; || true
-              sudo find storage bootstrap/cache -type f -exec chmod 664 {} \; || true
-            else
-              chown -R www-data:www-data storage bootstrap/cache || true
-              find storage bootstrap/cache -type d -exec chmod 775 {} \; || true
-              find storage bootstrap/cache -type f -exec chmod 664 {} \; || true
-            fi
+            run_as_root chown -R www-data:www-data storage bootstrap/cache
+            run_as_root find storage bootstrap/cache -type d -exec chmod 775 {} \;
+            run_as_root find storage bootstrap/cache -type f -exec chmod 664 {} \;
 
             php artisan up
