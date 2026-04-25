@@ -14,7 +14,6 @@ class CheckTwoFactorApi
         // On permet check-auth et check-2fa-required pour que le front puisse tester l'état sans être bloqué
         if (
             $request->is('api/auth/*') ||
-            $request->is('api/2fa/*') ||
             $request->is('api/check-auth') ||
             $request->routeIs('logout')
         ) {

@@ -80,5 +80,27 @@ class RouteServiceProvider extends ServiceProvider
                     ], 429, $headers);
                 });
         });
+
+        RateLimiter::for('login', function (Request $request) {
+            return Limit::perMinute(5)
+                ->by(strtolower((string) $request->input('login')) . '|' . $request->ip())
+                ->response(function (Request $request, array $headers) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Trop de tentatives de connexion. Reessayez plus tard.'
+                    ], 429, $headers);
+                });
+        });
+
+        RateLimiter::for('twofactor', function (Request $request) {
+            return Limit::perMinute(6)
+                ->by(($request->user()?->id ?: $request->ip()) . '|2fa')
+                ->response(function (Request $request, array $headers) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Trop de tentatives 2FA. Reessayez plus tard.'
+                    ], 429, $headers);
+                });
+        });
     }
 }

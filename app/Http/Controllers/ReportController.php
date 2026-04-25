@@ -47,7 +47,8 @@ class ReportController extends Controller
                 'city' => 'nullable|string|max:255',
                 'province' => 'nullable|string|max:255',
                 'region' => 'nullable|string|max:255',
-                'type_signalement' => 'required|in:anonyme,non-anonyme'
+                'type_signalement' => 'required|in:anonyme,non-anonyme',
+                'files.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx,mp4|max:25600',
             ]);
 
             if ($validator->fails()) {
@@ -56,6 +57,20 @@ class ReportController extends Controller
                     'message' => 'Erreur de validation',
                     'errors' => $validator->errors()
                 ], 422);
+            }
+
+            // Vérification de la taille totale (25 Mo)
+            if ($request->hasFile('files')) {
+                $totalSize = 0;
+                foreach ($request->file('files') as $file) {
+                    $totalSize += $file->getSize();
+                }
+                if ($totalSize > 25 * 1024 * 1024) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'La taille totale des fichiers ne doit pas dépasser 25 Mo.'
+                    ], 422);
+                }
             }
 
             // Déterminer le type
@@ -88,8 +103,10 @@ class ReportController extends Controller
             // Gérer les fichiers uploadés
             $uploadedFiles = [];
             if ($request->hasFile('files')) {
+                // Utiliser la référence générée par le modèle ou en créer une
+                $tempRef = Report::generateReference();
                 foreach ($request->file('files') as $file) {
-                    $fileName = $this->storeFile($file);
+                    $fileName = $this->storeFile($file, $tempRef);
                     if ($fileName) {
                         $uploadedFiles[] = $fileName;
                     }
@@ -97,7 +114,8 @@ class ReportController extends Controller
 
                 if (!empty($uploadedFiles)) {
                     $reportData['files'] = $uploadedFiles;
-                    $reportData['has_proof'] = true; // ✅ METTRE À JOUR has_proof
+                    $reportData['has_proof'] = true;
+                    $reportData['reference'] = $tempRef; // Forcer la référence utilisée pour les fichiers
                 }
             }
 
@@ -148,19 +166,23 @@ class ReportController extends Controller
     /**
      * ✅ MÉTHODE POUR STOCKER UN FICHIER
      */
-    private function storeFile($file)
+    private function storeFile($file, $reference = null)
     {
         try {
-            $originalName = $file->getClientOriginalName();
-            $extension = $file->getClientOriginalExtension();
+            $originalName = basename(str_replace('\\', '/', $file->getClientOriginalName()));
+            $extension = strtolower($file->getClientOriginalExtension());
+            $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+            $safeBaseName = Str::slug($baseName, '_') ?: 'piece_jointe';
+            $fileName = now()->format('YmdHis') . '_' . Str::random(12) . '_' . $safeBaseName . '.' . $extension;
 
-            // Générer un nom unique
-            $fileName = time() . '_' . Str::random(8) . '.' . $extension;
+            // Si pas de référence, on met dans la racine, sinon dans un sous-dossier
+            $folder = $reference ? 'reports/' . $reference : 'reports';
 
-            // Stocker dans le dossier reports
-            $path = $file->storeAs('reports', $fileName, 'public');
+            // Stocker
+            $path = $file->storeAs($folder, $fileName, 'public');
 
-            return $fileName;
+            // Retourner le chemin relatif pour la base de données
+            return $reference ? $reference . '/' . $fileName : $fileName;
 
         } catch (\Exception $e) {
             Log::error('Erreur stockage fichier: ' . $e->getMessage());
@@ -183,8 +205,22 @@ class ReportController extends Controller
             'description' => 'required|string',
             'accept_terms' => 'required|boolean',
             'accept_truth' => 'required|boolean',
-            'files.*' => 'sometimes|file|mimes:jpg,jpeg,png,mp4,pdf|max:51200',
+            'files.*' => 'sometimes|file|mimes:jpg,jpeg,png,mp4,pdf|max:25600',
         ]);
+
+        // Vérification de la taille totale (25 Mo)
+        if ($request->hasFile('files')) {
+            $totalSize = 0;
+            foreach ($request->file('files') as $file) {
+                $totalSize += $file->getSize();
+            }
+            if ($totalSize > 25 * 1024 * 1024) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'La taille totale des fichiers ne doit pas dépasser 25 Mo.'
+                ], 422);
+            }
+        }
 
         try {
             // Créer le rapport
@@ -206,7 +242,7 @@ class ReportController extends Controller
             $fileNames = [];
             if ($request->hasFile('files')) {
                 foreach ($request->file('files') as $index => $file) {
-                    $fileName = $this->storeFile($file);
+                    $fileName = $this->storeFile($file, $report->reference);
                     if ($fileName) {
                         $fileNames[] = $fileName;
                     }
@@ -483,14 +519,6 @@ class ReportController extends Controller
             ]);
             throw $e;
         }
-    }
-
-    /**
-     * Fonction pour générer une référence
-     */
-    private function generateReference()
-    {
-        return 'FOS-' . date('Ymd') . '-' . strtoupper(Str::random(6));
     }
 
     public function uploadFile(Request $request)
@@ -790,15 +818,30 @@ class ReportController extends Controller
         try {
             $decodedFilename = urldecode($filename);
 
-            // Vérification de sécurité
-            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+            // Vérification de sécurité (on autorise / pour les sous-dossiers de référence)
+            if (strpos($decodedFilename, '..') !== false) {
                 return response()->json(['error' => 'Nom de fichier invalide'], 400);
             }
 
             $filePath = storage_path('app/public/reports/' . $decodedFilename);
 
             if (!file_exists($filePath)) {
-                return response()->json(['error' => 'Fichier non trouvé'], 404);
+                // Essayer de chercher si le fichier est dans un sous-dossier (en cherchant dans la DB)
+                $pureFilename = basename($decodedFilename);
+                $report = Report::where('files', 'LIKE', '%' . $pureFilename . '%')->first();
+
+                if ($report && !empty($report->files)) {
+                    foreach ($report->files as $f) {
+                        if (basename($f) === $pureFilename) {
+                            $filePath = storage_path('app/public/reports/' . $f);
+                            break;
+                        }
+                    }
+                }
+
+                if (!file_exists($filePath)) {
+                    return response()->json(['error' => 'Fichier non trouvé'], 404);
+                }
             }
 
             // Vérification MIME type
@@ -827,17 +870,32 @@ class ReportController extends Controller
             $decodedFilename = urldecode($filename);
 
             // Vérification de sécurité
-            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+            if (strpos($decodedFilename, '..') !== false) {
                 return response()->json(['error' => 'Nom de fichier invalide'], 400);
             }
 
             $filePath = storage_path('app/public/reports/' . $decodedFilename);
 
             if (!file_exists($filePath)) {
-                return response()->json(['error' => 'Fichier non trouvé'], 404);
+                // Recherche dans les sous-dossiers
+                $pureFilename = basename($decodedFilename);
+                $report = Report::where('files', 'LIKE', '%' . $pureFilename . '%')->first();
+
+                if ($report && !empty($report->files)) {
+                    foreach ($report->files as $f) {
+                        if (basename($f) === $pureFilename) {
+                            $filePath = storage_path('app/public/reports/' . $f);
+                            break;
+                        }
+                    }
+                }
+
+                if (!file_exists($filePath)) {
+                    return response()->json(['error' => 'Fichier non trouvé'], 404);
+                }
             }
 
-            return response()->download($filePath, $decodedFilename);
+            return response()->download($filePath, basename($decodedFilename));
 
         } catch (\Exception $e) {
             Log::error('File download error: ' . $e->getMessage());
@@ -856,10 +914,23 @@ class ReportController extends Controller
 
             // Chercher le rapport associé
             $report = Report::where('files', 'LIKE', '%' . $filename . '%')->first();
-            $reference = $report ? $report->reference : 'REF-' . time();
+            if (!$report) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Fichier introuvable'
+                ], 404);
+            }
+
+            $storedFilename = $filename;
+            foreach (($report->files ?? []) as $file) {
+                if (basename((string) $file) === $filename) {
+                    $storedFilename = (string) $file;
+                    break;
+                }
+            }
 
             // Vérifier si le fichier existe ou peut être créé
-            $filePath = $this->fileService->findOrCreateFile($filename, $reference);
+            $filePath = $this->fileService->findExistingFile($storedFilename, $report->reference);
 
             if (!$filePath) {
                 return response()->json([
@@ -869,18 +940,19 @@ class ReportController extends Controller
             }
 
             // Générer les URLs publiques
+            $encodedFilename = implode('/', array_map('rawurlencode', explode('/', $storedFilename)));
             $baseUrl = url('/api');
-            $url = $baseUrl . '/files/' . urlencode($filename);
-            $downloadUrl = $baseUrl . '/files/' . urlencode($filename) . '/download';
+            $url = $baseUrl . '/files/public/' . $encodedFilename;
+            $downloadUrl = $baseUrl . '/files/public/' . $encodedFilename . '/download';
 
             return response()->json([
                 'success' => true,
                 'url' => $url,
                 'download_url' => $downloadUrl,
-                'filename' => $filename,
+                'filename' => $storedFilename,
                 'file_exists' => file_exists($filePath),
                 'file_size' => file_exists($filePath) ? filesize($filePath) : 0,
-                'reference' => $reference
+                'reference' => $report->reference
             ]);
 
         } catch (\Exception $e) {
@@ -908,11 +980,12 @@ class ReportController extends Controller
 
             $filesWithUrls = [];
             foreach ($files as $file) {
-                $filePath = $this->fileService->findOrCreateFile($file, $reference);
+                $filePath = $this->fileService->findExistingFile($file, $reference);
+                $encodedFilename = implode('/', array_map('rawurlencode', explode('/', $file)));
                 $filesWithUrls[] = [
                     'filename' => $file,
-                    'view_url' => url('/api/files/' . $file),
-                    'download_url' => url('/api/files/' . $file . '/download'),
+                    'view_url' => url('/api/files/public/' . $encodedFilename),
+                    'download_url' => url('/api/files/public/' . $encodedFilename . '/download'),
                     'file_exists' => $filePath !== null,
                     'file_size' => $filePath ? filesize($filePath) : 0
                 ];
@@ -1967,15 +2040,45 @@ class ReportController extends Controller
     /**
      * ✅ MÉTHODE POUR ACCÉDER AUX FICHIERS PUBLIQUES
      */
+    private function findReportForPublicFile(string $requestedFilename): ?Report
+    {
+        $basename = basename(str_replace('\\', '/', $requestedFilename));
+        $like = addcslashes($basename, '%_\\');
+
+        return Report::where('files', 'LIKE', '%' . $like . '%')
+            ->get()
+            ->first(function (Report $report) use ($requestedFilename, $basename) {
+                $files = $report->files ?? [];
+                if (is_string($files)) {
+                    $files = json_decode($files, true) ?: [];
+                }
+
+                foreach ($files as $file) {
+                    $storedFile = (string) $file;
+                    if ($storedFile === $requestedFilename || basename(str_replace('\\', '/', $storedFile)) === $basename) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+    }
+
     public function getPublicFile($filename): Response
     {
         try {
             // Nettoyer le nom du fichier
-            $decodedFilename = urldecode(basename($filename));
+            $decodedFilename = urldecode($filename);
 
             // Vérification de sécurité
-            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+            if (strpos($decodedFilename, '..') !== false) {
                 abort(400, 'Nom de fichier invalide');
+            }
+
+            // Chercher le rapport pour voir s'il y a un sous-dossier de référence
+            $report = $this->findReportForPublicFile($decodedFilename);
+            if (!$report) {
+                abort(404, 'Fichier non trouvÃ©');
             }
 
             // Chercher dans plusieurs chemins possibles
@@ -1983,8 +2086,11 @@ class ReportController extends Controller
                 storage_path('app/public/reports/' . $decodedFilename),
                 public_path('storage/reports/' . $decodedFilename),
                 public_path('uploads/reports/' . $decodedFilename),
-                storage_path('app/public/uploads/' . $decodedFilename),
             ];
+
+            if ($report) {
+                array_unshift($possiblePaths, storage_path('app/public/reports/' . $report->reference . '/' . $decodedFilename));
+            }
 
             $filePath = null;
             foreach ($possiblePaths as $path) {
@@ -1996,14 +2102,14 @@ class ReportController extends Controller
 
             if (!$filePath) {
                 // Chercher dans la base de données si le fichier existe
-                $report = Report::where('files', 'LIKE', '%' . $decodedFilename . '%')->first();
+                $report = $this->findReportForPublicFile($decodedFilename);
 
                 if (!$report) {
                     abort(404, 'Fichier non trouvé');
                 }
 
                 // Essayer de générer le fichier si possible
-                $generatedPath = $this->fileService->findOrCreateFile($decodedFilename, $report->reference);
+                $generatedPath = $this->fileService->findExistingFile($decodedFilename, $report->reference);
 
                 if (!$generatedPath || !file_exists($generatedPath)) {
                     abort(404, 'Fichier non trouvé');
@@ -2018,8 +2124,10 @@ class ReportController extends Controller
             // Retourner le fichier
             return response()->file($filePath, [
                 'Content-Type' => $mimeType,
-                'Content-Disposition' => 'inline; filename="' . $decodedFilename . '"',
+                'Content-Disposition' => 'inline; filename="' . basename($decodedFilename) . '"',
                 'Cache-Control' => 'public, max-age=31536000',
+                'X-Content-Type-Options' => 'nosniff',
+                'Content-Security-Policy' => 'sandbox',
             ]);
 
         } catch (\Exception $e) {
@@ -2043,11 +2151,17 @@ class ReportController extends Controller
     {
         try {
             // Nettoyer le nom du fichier
-            $decodedFilename = urldecode(basename($filename));
+            $decodedFilename = urldecode($filename);
 
             // Vérification de sécurité
-            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+            if (strpos($decodedFilename, '..') !== false) {
                 abort(400, 'Nom de fichier invalide');
+            }
+
+            // Chercher le rapport pour voir s'il y a un sous-dossier de référence
+            $report = $this->findReportForPublicFile($decodedFilename);
+            if (!$report) {
+                abort(404, 'Fichier non trouvÃ©');
             }
 
             // Chercher dans plusieurs chemins possibles
@@ -2055,8 +2169,11 @@ class ReportController extends Controller
                 storage_path('app/public/reports/' . $decodedFilename),
                 public_path('storage/reports/' . $decodedFilename),
                 public_path('uploads/reports/' . $decodedFilename),
-                storage_path('app/public/uploads/' . $decodedFilename),
             ];
+
+            if ($report) {
+                array_unshift($possiblePaths, storage_path('app/public/reports/' . $report->reference . '/' . $decodedFilename));
+            }
 
             $filePath = null;
             foreach ($possiblePaths as $path) {
@@ -2068,14 +2185,14 @@ class ReportController extends Controller
 
             // Si fichier non trouvé, chercher dans la base de données
             if (!$filePath) {
-                $report = Report::where('files', 'LIKE', '%' . $decodedFilename . '%')->first();
+                $report = $this->findReportForPublicFile($decodedFilename);
 
                 if (!$report) {
                     abort(404, 'Fichier non trouvé');
                 }
 
                 // Essayer de générer le fichier si possible
-                $generatedPath = $this->fileService->findOrCreateFile($decodedFilename, $report->reference);
+                $generatedPath = $this->fileService->findExistingFile($decodedFilename, $report->reference);
 
                 if (!$generatedPath || !file_exists($generatedPath)) {
                     abort(404, 'Fichier non trouvé');
@@ -2088,8 +2205,9 @@ class ReportController extends Controller
             $mimeType = mime_content_type($filePath);
 
             // Retourner le fichier en téléchargement
-            return response()->download($filePath, $decodedFilename, [
+            return response()->download($filePath, basename($decodedFilename), [
                 'Content-Type' => $mimeType,
+                'X-Content-Type-Options' => 'nosniff',
             ]);
 
         } catch (\Exception $e) {
@@ -2113,10 +2231,10 @@ class ReportController extends Controller
     {
         try {
             // Nettoyer le nom du fichier
-            $decodedFilename = urldecode(basename($filename));
+            $decodedFilename = urldecode($filename);
 
             // Vérification de sécurité
-            if (strpos($decodedFilename, '..') !== false || strpos($decodedFilename, '/') !== false) {
+            if (strpos($decodedFilename, '..') !== false) {
                 abort(400, 'Nom de fichier invalide');
             }
 
@@ -2125,8 +2243,16 @@ class ReportController extends Controller
                 storage_path('app/public/reports/' . $decodedFilename),
                 public_path('storage/reports/' . $decodedFilename),
                 public_path('uploads/reports/' . $decodedFilename),
-                storage_path('app/public/uploads/' . $decodedFilename),
             ];
+
+            // Chercher le rapport pour voir s'il y a un sous-dossier de référence
+            $report = $this->findReportForPublicFile($decodedFilename);
+            if (!$report) {
+                abort(404, 'Fichier non trouvÃ©');
+            }
+            if ($report) {
+                array_unshift($possiblePaths, storage_path('app/public/reports/' . $report->reference . '/' . $decodedFilename));
+            }
 
             $filePath = null;
             foreach ($possiblePaths as $path) {
@@ -2137,7 +2263,16 @@ class ReportController extends Controller
             }
 
             if (!$filePath) {
-                abort(404, 'Fichier non trouvé');
+                if ($report) {
+                    $generatedPath = $this->fileService->findExistingFile($decodedFilename, $report->reference);
+                    if ($generatedPath && file_exists($generatedPath)) {
+                        $filePath = $generatedPath;
+                    }
+                }
+
+                if (!$filePath) {
+                    abort(404, 'Fichier non trouvé');
+                }
             }
 
             // Déterminer le type de contenu
@@ -2146,7 +2281,9 @@ class ReportController extends Controller
             // Retourner le fichier pour visualisation
             return response()->file($filePath, [
                 'Content-Type' => $mimeType,
-                'Content-Disposition' => 'inline; filename="' . $decodedFilename . '"',
+                'Content-Disposition' => 'inline; filename="' . basename($decodedFilename) . '"',
+                'X-Content-Type-Options' => 'nosniff',
+                'Content-Security-Policy' => 'sandbox',
             ]);
 
         } catch (\Exception $e) {

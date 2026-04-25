@@ -51,19 +51,19 @@ class JournalAuditController extends Controller
                 $query->where('utilisateur', 'like', "%{$request->user}%");
             }
 
-            if ($request->has('action') && $request->action) {
-                $query->where('action', $request->action);
+            if ($request->filled('action')) {
+                $this->applyActionFilter($query, $request->action);
             }
 
-            if ($request->has('status') && $request->status) {
-                $query->where('statut', 'like', "%{$request->status}%");
+            if ($request->filled('status')) {
+                $this->applyStatusFilter($query, $request->status);
             }
 
-            if ($request->has('auditDateStart') && $request.auditDateStart) {
+            if ($request->filled('auditDateStart')) {
                 $query->whereDate('timestamp', '>=', $request->auditDateStart);
             }
 
-            if ($request->has('auditDateEnd') && $request->auditDateEnd) {
+            if ($request->filled('auditDateEnd')) {
                 $query->whereDate('timestamp', '<=', $request->auditDateEnd);
             }
 
@@ -316,11 +316,12 @@ class JournalAuditController extends Controller
             // Calculer les statistiques
             $stats = [
                 'total_actions' => AuditSysteme::count(),
-                'success_actions' => AuditSysteme::where('statut', 'like', '%Succès%')->count(),
-                'failed_actions' => AuditSysteme::where('statut', 'like', '%Échec%')
-                    ->orWhere('statut', 'like', '%Refusé%')
-                    ->orWhere('statut', 'like', '%Erreur%')
-                    ->count(),
+                'success_actions' => AuditSysteme::where(function ($query) {
+                    $this->applyStatusFilter($query, 'Succès');
+                })->count(),
+                'failed_actions' => AuditSysteme::where(function ($query) {
+                    $this->applyStatusFilter($query, 'Échec');
+                })->count(),
                 'top_users' => AuditSysteme::select('utilisateur')
                     ->selectRaw('COUNT(*) as action_count')
                     ->groupBy('utilisateur')
@@ -451,5 +452,43 @@ class JournalAuditController extends Controller
                 'message' => 'Erreur lors de la récupération des logs personnels'
             ], 500);
         }
+    }
+
+    private function applyActionFilter($query, string $action): void
+    {
+        $normalized = mb_strtolower(trim($action));
+        $variants = match ($normalized) {
+            'création', 'creation' => ['Création', 'CrÃ©ation', 'Creation', 'POST'],
+            'modification' => ['Modification', 'PUT', 'PATCH', 'Update'],
+            'suppression' => ['Suppression', 'DELETE', 'Destroy', 'Remove'],
+            'connexion' => ['Connexion', 'Login'],
+            'déconnexion', 'deconnexion' => ['Déconnexion', 'DÃ©connexion', 'Logout'],
+            'consultation' => ['Consultation', 'GET', 'Read'],
+            'export' => ['Export'],
+            default => [$action],
+        };
+
+        $query->where(function ($q) use ($variants) {
+            foreach ($variants as $variant) {
+                $q->orWhere('action', 'like', "%{$variant}%");
+            }
+        });
+    }
+
+    private function applyStatusFilter($query, string $status): void
+    {
+        $normalized = mb_strtolower(trim($status));
+        $variants = match ($normalized) {
+            'succès', 'succes', 'success' => ['Succès', 'SuccÃ¨s', 'Success', '200', '201', '204'],
+            'échec', 'echec', 'fail', 'failed' => ['Échec', 'Ã‰chec', 'Echec', 'Fail', 'Erreur'],
+            'refusé', 'refuse', 'refus' => ['Refusé', 'RefusÃ©', 'Refuse', '401', '403'],
+            default => [$status],
+        };
+
+        $query->where(function ($q) use ($variants) {
+            foreach ($variants as $variant) {
+                $q->orWhere('statut', 'like', "%{$variant}%");
+            }
+        });
     }
 }

@@ -14,13 +14,14 @@ class Kernel extends HttpKernel
     protected $middleware = [
         // ✅ AJOUTEZ CorsFix ICI EN PREMIER (avant tout autre middleware)
         \App\Http\Middleware\CorsFix::class,
+        \App\Http\Middleware\SecurityHeaders::class,
         
         // \Illuminate\Http\Middleware\TrustProxies::class,
         // \Illuminate\Http\Middleware\HandleCors::class, // ← Retirez celui-ci si présent ici
-        // \Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance::class,
-        // \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
-        // \App\Http\Middleware\TrimStrings::class,
-        // \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
+        \Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance::class,
+        \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
+        \App\Http\Middleware\TrimStrings::class,
+        \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
     ];
 
     /**

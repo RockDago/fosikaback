@@ -11,7 +11,7 @@ return [
         'user/*',
         'files/*',
         'reports/tracking/*',
-        'chat/*', // ✅ AJOUTEZ CETTE LIGNE EXPLICITEMENT
+        'chat/*', 
     ],
 
     'allowed_methods' => ['*'],
@@ -19,7 +19,8 @@ return [
     'allowed_origins' => [
         'http://localhost:3000',
         'http://127.0.0.1:3000',
-        'https://fosika.mesupres.edu.mg',
+        'https://fosika.mesupres.mg',
+        'https://www.fosika.mesupres.mg',
     ],
 
     'allowed_origins_patterns' => [],
@@ -34,5 +35,5 @@ return [
 
     'supports_credentials' => true,
 
-    'max_age' => 86400, // ✅ CHANGEZ de 0 à 86400 (24h) pour mettre en cache les requêtes preflight
+    'max_age' => 86400, 
 ];

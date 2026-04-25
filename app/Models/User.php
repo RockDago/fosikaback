@@ -206,11 +206,14 @@ class User extends Authenticatable
 
         // Générer des codes de récupération
         $recoveryCodes = [];
+        $hashedRecoveryCodes = [];
         for ($i = 0; $i < 8; $i++) {
-            $recoveryCodes[] = Str::random(10) . '-' . Str::random(10);
+            $plainCode = Str::random(10) . '-' . Str::random(10);
+            $recoveryCodes[] = $plainCode;
+            $hashedRecoveryCodes[] = Hash::make($plainCode);
         }
 
-        $this->two_factor_recovery_codes = $recoveryCodes;
+        $this->two_factor_recovery_codes = $hashedRecoveryCodes;
         $this->two_factor_code = null;
         $this->two_factor_code_expires_at = null;
         $this->save();
@@ -256,6 +259,15 @@ class User extends Authenticatable
     {
         $recoveryCodes = $this->two_factor_recovery_codes ?? [];
 
+        foreach ($recoveryCodes as $index => $storedCode) {
+            if (is_string($storedCode) && Hash::check($code, $storedCode)) {
+                unset($recoveryCodes[$index]);
+                $this->two_factor_recovery_codes = array_values($recoveryCodes);
+                $this->save();
+                return true;
+            }
+        }
+
         $index = array_search($code, $recoveryCodes);
         if ($index !== false) {
             // Retirer le code utilisé
@@ -291,11 +303,14 @@ class User extends Authenticatable
     public function generateNewRecoveryCodes(): array
     {
         $recoveryCodes = [];
+        $hashedRecoveryCodes = [];
         for ($i = 0; $i < 8; $i++) {
-            $recoveryCodes[] = Str::random(10) . '-' . Str::random(10);
+            $plainCode = Str::random(10) . '-' . Str::random(10);
+            $recoveryCodes[] = $plainCode;
+            $hashedRecoveryCodes[] = Hash::make($plainCode);
         }
 
-        $this->two_factor_recovery_codes = $recoveryCodes;
+        $this->two_factor_recovery_codes = $hashedRecoveryCodes;
         $this->save();
 
         return $recoveryCodes;

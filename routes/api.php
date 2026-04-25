@@ -88,7 +88,8 @@ Route::prefix('etablissements')->group(function () {
 });
 
 // ✅ ROUTES CHAT PUBLIQUES
-Route::post('/chats/admin/create', [ChatController::class, 'createAdminChat']);
+Route::post('/chats/admin/create', [ChatController::class, 'createAdminChat'])
+    ->middleware(['auth:sanctum', 'twofactor.api', 'check.role:admin,agent']);
 
 // Marquer les messages du support comme lus (pour visiteurs)
 Route::post('/chats/public/{id}/mark-read', [ChatController::class, 'markPublicAsRead']);
@@ -123,6 +124,7 @@ Route::get('/chats/{id}/public', [ChatController::class, 'showPublic'])
 
 // Récupérer les chats récents (visiteur)
 Route::get('/chats/recent/public', [ChatController::class, 'getRecentPublicChats'])
+    ->middleware(['auth:sanctum', 'twofactor.api', 'check.role:admin,agent,investigateur'])
     ->name('chats.recent.public');
 
 // Mettre à jour le statut en ligne du visiteur
@@ -148,7 +150,8 @@ Route::prefix('chat')->group(function () {
     Route::get('/conversation/{id}', [ChatController::class, 'showPublic']);
 
     // ✅ Liste des conversations récentes
-    Route::get('/recent', [ChatController::class, 'getRecentPublicChats']);
+    Route::get('/recent', [ChatController::class, 'getRecentPublicChats'])
+        ->middleware(['auth:sanctum', 'twofactor.api', 'check.role:admin,agent,investigateur']);
 
     // ✅ Vérifier une référence de dossier
     Route::get('/dossier/{reference}', [ChatController::class, 'checkReference']);
@@ -183,21 +186,24 @@ Route::get('/reports/tracking-old/{reference}', [ReportController::class, 'check
 Route::prefix('files')->group(function () {
     // ✅ Accès aux fichiers publics des dossiers SANS auth
     Route::get('public/{filename}', [ReportController::class, 'getPublicFile'])
+        ->where('filename', '.*')
         ->name('files.public.get');
     
     // ✅ Télécharger un fichier public
     Route::get('public/{filename}/download', [ReportController::class, 'downloadPublicFile'])
+        ->where('filename', '.*')
         ->name('files.public.download');
     
     // ✅ Visualiser un fichier public
     Route::get('public/{filename}/view', [ReportController::class, 'viewPublicFile'])
+        ->where('filename', '.*')
         ->name('files.public.view');
 });
 
 // =========================================
 // AUTHENTIFICATION PUBLIQUE
 // =========================================
-Route::post('/auth/login', [UserAuthController::class, 'login']);
+Route::post('/auth/login', [UserAuthController::class, 'login'])->middleware('throttle:login');
 
 // =========================================
 // ROUTES PROTÉGÉES - SANCTUM SEULEMENT (SANS 2FA)
@@ -209,8 +215,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/auth/check-2fa-required', [UserAuthController::class, 'checkTwoFactorRequired']);
 
     // ✅ ROUTES 2FA APRÈS LOGIN
-    Route::post('/auth/verify-2fa', [UserAuthController::class, 'verifyTwoFactor']);
-    Route::post('/auth/resend-2fa-code', [UserAuthController::class, 'resendTwoFactorCode']);
+    Route::post('/auth/verify-2fa', [UserAuthController::class, 'verifyTwoFactor'])->middleware('throttle:twofactor');
+    Route::post('/auth/resend-2fa-code', [UserAuthController::class, 'resendTwoFactorCode'])->middleware('throttle:twofactor');
 
     // ✅ ÉTAT SESSION 2FA
     Route::get('/auth/2fa-status', function (Request $request) {
@@ -261,11 +267,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // ✅ GESTION 2FA (sans middleware 2FA)
     Route::prefix('2fa')->group(function () {
-        Route::post('/send-code', [TwoFactorAuthenticationController::class, 'sendVerificationCode']);
-        Route::post('/verify-code', [TwoFactorAuthenticationController::class, 'verifyCode']);
-        Route::post('/toggle', [TwoFactorAuthenticationController::class, 'toggleTwoFactor']);
-        Route::post('/generate-recovery-codes', [TwoFactorAuthenticationController::class, 'generateRecoveryCodes']);
-        Route::post('/verify-recovery-code', [TwoFactorAuthenticationController::class, 'verifyRecoveryCode']);
+        Route::post('/send-code', [TwoFactorAuthenticationController::class, 'sendVerificationCode'])->middleware('throttle:twofactor');
+        Route::post('/verify-code', [TwoFactorAuthenticationController::class, 'verifyCode'])->middleware('throttle:twofactor');
+        Route::post('/verify', [TwoFactorAuthenticationController::class, 'verifyCode'])->middleware('throttle:twofactor');
+        Route::post('/verify-recovery-code', [TwoFactorAuthenticationController::class, 'verifyRecoveryCode'])->middleware('throttle:twofactor');
         Route::get('/status', function (Request $request) {
             $user = $request->user();
             return response()->json([
@@ -275,13 +280,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
                 'has_recovery_codes' => !empty($user->two_factor_recovery_codes),
             ]);
         });
+
+        Route::middleware('twofactor.api')->group(function () {
+            Route::post('/toggle', [TwoFactorAuthenticationController::class, 'toggleTwoFactor']);
+            Route::post('/generate-recovery-codes', [TwoFactorAuthenticationController::class, 'generateRecoveryCodes']);
+        });
     });
 
     // ✅ ROUTES USER 2FA
     Route::prefix('user')->group(function () {
         Route::post('/two-factor-authentication/send-code', [TwoFactorAuthenticationController::class, 'sendVerificationCode']);
         Route::post('/two-factor-authentication/confirm', [TwoFactorAuthenticationController::class, 'verifyCode']);
-        Route::post('/two-factor-authentication', [TwoFactorAuthenticationController::class, 'toggleTwoFactor']);
+        Route::post('/two-factor-authentication', [TwoFactorAuthenticationController::class, 'toggleTwoFactor'])
+            ->middleware('twofactor.api');
         Route::get('/check-2fa-required', function (Request $request) {
             $user = $request->user();
             return response()->json([
@@ -300,11 +311,14 @@ Route::middleware(['auth:sanctum'])->group(function () {
     });
 
     // ✅ ROUTES DOSSIERS PROTÉGÉES (avec auth seulement, sans 2FA)
-    Route::post('/dossier/{reference}/create-chat', [DossierController::class, 'createChatFromDossier']);
-    Route::get('/user/dossiers', [DossierController::class, 'getUserDossiers']);
+    Route::middleware('twofactor.api')->group(function () {
+        Route::post('/dossier/{reference}/create-chat', [DossierController::class, 'createChatFromDossier']);
+        Route::get('/user/dossiers', [DossierController::class, 'getUserDossiers']);
+    });
 
     // 🔍 DEBUG & TEST
-    Route::prefix('debug')->group(function () {
+    if (app()->environment('local')) {
+    Route::prefix('debug')->middleware('check.role:admin')->group(function () {
         Route::get('/token-info', fn(Request $request) => response()->json([
             'success' => true,
             'user' => $request->user()?->only(['id', 'email', 'role']),
@@ -387,17 +401,18 @@ Route::middleware(['auth:sanctum'])->group(function () {
             ]);
         });
     });
+    }
 });
 
 // =========================================
 // ROUTES PROTÉGÉES - SANCTUM + 2FA REQUIS
 // =========================================
-Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
+Route::middleware(['auth:sanctum', 'log.actions', 'twofactor.api'])->group(function () {
 
     // =========================================
     // ✅ ROUTES ENSEIGNANTS PROTÉGÉES (GESTION ADMIN)
     // =========================================
-    Route::prefix('admin/enseignants')->group(function () {
+    Route::prefix('admin/enseignants')->middleware('check.role:admin')->group(function () {
         // CRUD Enseignants
         Route::post('/', [EnseignantController::class, 'store']);
         Route::put('/{id}', [EnseignantController::class, 'update']);
@@ -408,13 +423,13 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
         Route::get('/export', [EnseignantController::class, 'export']);
     });
 
-    Route::prefix('admin/universites')->group(function () {
+    Route::prefix('admin/universites')->middleware('check.role:admin')->group(function () {
         Route::post('/', [UniversiteController::class, 'store']);
         Route::put('/{id}', [UniversiteController::class, 'update']);
         Route::delete('/{id}', [UniversiteController::class, 'destroy']);
     });
 
-    Route::prefix('admin/etablissements')->group(function () {
+    Route::prefix('admin/etablissements')->middleware('check.role:admin')->group(function () {
         Route::post('/', [EtablissementController::class, 'store']);
         Route::put('/{id}', [EtablissementController::class, 'update']);
         Route::delete('/{id}', [EtablissementController::class, 'destroy']);
@@ -423,7 +438,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     // =========================================
     // ✅ ROUTES DE CHAT PROTÉGÉES (avec auth + 2FA)
     // =========================================
-    Route::prefix('chat')->group(function () {
+    Route::prefix('chat')->middleware('check.role:admin,agent,investigateur')->group(function () {
         // Liste des conversations (admin/support)
         Route::get('/', [ChatController::class, 'index']);
 
@@ -444,13 +459,16 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     });
 
     // ✅ ROUTES FILES ADMIN (nécessite 2FA)
-    Route::prefix('files')->group(function () {
-        Route::get('admin/{filename}', [ReportController::class, 'getAdminFile']);
-        Route::get('admin/{filename}/download', [ReportController::class, 'downloadAdminFile']);
+    Route::prefix('files')->middleware('check.role:admin,agent,investigateur')->group(function () {
+        Route::get('admin/{filename}', [ReportController::class, 'getAdminFile'])
+            ->where('filename', '.*');
+        Route::get('admin/{filename}/download', [ReportController::class, 'downloadAdminFile'])
+            ->where('filename', '.*');
         Route::get('admin/{filename}/url', [ReportController::class, 'getFileUrl']);
     });
 
-    Route::post('/admin/users/create-with-notification', [UserAuthController::class, 'createUserWithNotification']);
+    Route::post('/admin/users/create-with-notification', [UserAuthController::class, 'createUserWithNotification'])
+        ->middleware('check.role:admin');
 
     // 🔥 PROFIL
     Route::prefix('profile')->group(function () {
@@ -490,7 +508,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     // =========================================
     // ROUTES PROTÉGÉES POUR LES SIGNALEMENTS (BACKOFFICE)
     // =========================================
-    Route::prefix('reports')->group(function () {
+    Route::prefix('reports')->middleware('check.role:admin,agent,investigateur')->group(function () {
         // Création d'un signalement (admin)
         Route::post('/admin/create', [ReportController::class, 'createReport']);
 
@@ -523,7 +541,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     });
 
     // ROUTES PROTÉGÉES POUR LES FICHIERS (BACKOFFICE)
-    Route::prefix('files')->group(function () {
+    Route::prefix('files')->middleware('check.role:admin,agent,investigateur')->group(function () {
         // Upload de fichiers (admin) - nécessite 2FA
         Route::post('/upload', [ReportController::class, 'uploadFile']);
 
@@ -534,7 +552,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     });
 
     // 🔥 UTILISATEURS
-    Route::prefix('users')->group(function () {
+    Route::prefix('users')->middleware('check.role:admin')->group(function () {
         Route::get('/', [UserController::class, 'getAllUsers']);
         Route::post('/', [UserController::class, 'createUser']);
         Route::get('/{id}', [UserController::class, 'show']);
@@ -547,6 +565,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
         Route::post('/{id}/status', [UserController::class, 'toggleStatus']);
         Route::patch('/{id}/status', [UserController::class, 'toggleStatus']);
         Route::put('/{id}/status', [UserController::class, 'toggleStatus']);
+        Route::post('/{id}/reset-password', [UserController::class, 'resetPassword']);
         Route::put('/{id}/reset-password', [UserController::class, 'resetPassword']);
         Route::get('/statistics', [UserController::class, 'getStats']);
         Route::get('/trashed/list', [UserController::class, 'trashed']);
@@ -558,7 +577,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     });
 
     // 🔥 ADMIN
-    Route::prefix('admin')->group(function () {
+    Route::prefix('admin')->middleware('check.role:admin')->group(function () {
         Route::get('/debug', fn(Request $request) => response()->json([
             'success' => true,
             'user' => $request->user()?->only(['id', 'email', 'role']),
@@ -575,6 +594,7 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
             Route::put('/users/{id}', [UserController::class, 'updateUser']);
             Route::delete('/users/{id}', [UserController::class, 'deleteUser']);
             Route::post('/users/{id}/toggle-status', [UserController::class, 'toggleStatus']);
+            Route::post('/users/{id}/reset-password', [UserController::class, 'resetPassword']);
             Route::put('/users/{id}/reset-password', [UserController::class, 'resetPassword']);
             Route::patch('/users/{id}/restore', [UserController::class, 'restoreUser']);
             Route::get('/stats', [UserController::class, 'getStats']);
@@ -591,10 +611,12 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
 
     // 🔥 AUDIT
     Route::prefix('audit')->group(function () {
-        Route::get('/logs', [JournalAuditController::class, 'getJournalData']);
-        Route::post('/logs/export', [JournalAuditController::class, 'exportAudit']);
-        Route::get('/export/download/{filename}', [JournalAuditController::class, 'downloadExport']);
-        Route::get('/stats', [JournalAuditController::class, 'getAuditStats']);
+        Route::middleware('check.role:admin')->group(function () {
+            Route::get('/logs', [JournalAuditController::class, 'getJournalData']);
+            Route::post('/logs/export', [JournalAuditController::class, 'exportAudit']);
+            Route::get('/export/download/{filename}', [JournalAuditController::class, 'downloadExport']);
+            Route::get('/stats', [JournalAuditController::class, 'getAuditStats']);
+        });
         Route::get('/my-logs', [JournalAuditController::class, 'getUserAuditLogs']);
     });
 
@@ -615,7 +637,8 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
     });
 
     // 🔥 TESTS
-    Route::prefix('test')->group(function () {
+    if (app()->environment('local')) {
+    Route::prefix('test')->middleware('check.role:admin')->group(function () {
         Route::get('/audit-log', fn() =>
         \App\Models\AuditSysteme::orderBy('timestamp', 'desc')
             ->limit(10)
@@ -623,12 +646,13 @@ Route::middleware(['auth:sanctum', 'twofactor.api'])->group(function () {
         );
         Route::post('/manual-log', fn(Request $request) => response()->json(['success' => true]));
     });
+    }
 });
 
 // =========================================
 // ROUTES UTILITAIRES (sans auth)
 // =========================================
-Route::prefix('common')->group(function () {
+Route::prefix('common')->middleware(['auth:sanctum', 'twofactor.api', 'check.role:admin,agent,investigateur'])->group(function () {
     Route::get('/agents', [UserController::class, 'getAgents']);
     Route::get('/investigateurs', [UserController::class, 'getInvestigateurs']);
     Route::get('/stats/users', [UserController::class, 'getStats']);
@@ -641,7 +665,7 @@ Route::prefix('common')->group(function () {
 Route::fallback(fn() => response()->json([
     'success' => false,
     'message' => 'Route non trouvée',
-    'available_routes' => [
+    'available_routes' => app()->environment('local') ? [
         // Routes publiques - Enseignants
         'GET /api/enseignants' => 'Liste enseignants avec pagination (PUBLIC)',
         'GET /api/enseignants/all' => 'Tous les enseignants sans pagination (PUBLIC)',
@@ -696,5 +720,5 @@ Route::fallback(fn() => response()->json([
         // Routes protégées - Fichiers Admin
         'GET /api/files/admin/{filename}' => 'Accéder fichier admin (ADMIN + 2FA)',
         'GET /api/files/admin/{filename}/download' => 'Télécharger fichier admin (ADMIN + 2FA)',
-    ],
+    ] : null,
 ], 404));

@@ -6,7 +6,9 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Hash;
 use App\Notifications\TwoFactorCodeNotification;
+use Jenssegers\Agent\Agent;
 
 class TwoFactorAuthenticationController extends Controller
 {
@@ -128,14 +130,19 @@ class TwoFactorAuthenticationController extends Controller
             // Vérifier si la 2FA est déjà activée (pour login normal)
             if ($user->two_factor_enabled) {
                 if ($user->verifyTwoFactorCode($request->code)) {
+                    $agent = new Agent();
                     // Marquer comme vérifié dans la session
                     session(['2fa_verified' => true]);
                     session(['2fa_verified_at' => now()]);
 
                     // Effacer le code utilisé
-                    $user->two_factor_code = null;
-                    $user->two_factor_code_expires_at = null;
-                    $user->save();
+                    $user->forceFill([
+                        'two_factor_verified_at' => now(),
+                        'two_factor_code' => null,
+                        'two_factor_code_expires_at' => null,
+                        'trusted_device_ip' => $request->ip(),
+                        'trusted_device_agent' => $agent->browser() . ' on ' . $agent->platform(),
+                    ])->save();
 
                     Log::info('2FA vérifiée pour la connexion:', [
                         'user_id' => $user->id,
@@ -170,6 +177,13 @@ class TwoFactorAuthenticationController extends Controller
             $result = $user->verifyAndEnableTwoFactor($request->code);
 
             if ($result) {
+                $agent = new Agent();
+                $user->forceFill([
+                    'two_factor_verified_at' => now(),
+                    'trusted_device_ip' => $request->ip(),
+                    'trusted_device_agent' => $agent->browser() . ' on ' . $agent->platform(),
+                ])->save();
+
                 Log::info('2FA activée pour l\'utilisateur:', [
                     'user_id' => $user->id,
                     'email' => $user->email
@@ -180,7 +194,7 @@ class TwoFactorAuthenticationController extends Controller
                     'message' => 'Double authentification activée avec succès!',
                     'data' => [
                         'two_factor_enabled' => true,
-                        'recovery_codes' => $user->two_factor_recovery_codes,
+                            'recovery_codes' => [],
                         'user' => $user->getProfileData()
                     ]
                 ]);
@@ -218,7 +232,8 @@ class TwoFactorAuthenticationController extends Controller
     {
         try {
             $request->validate([
-                'enabled' => 'boolean'
+                'enabled' => 'boolean',
+                'current_password' => 'required_if:enabled,false|string',
             ]);
 
             $user = $request->user();
@@ -249,6 +264,13 @@ class TwoFactorAuthenticationController extends Controller
                 ]);
             } else {
                 // Désactiver la 2FA
+                if (!Hash::check((string) $request->input('current_password'), $user->password)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Mot de passe actuel incorrect',
+                    ], 422);
+                }
+
                 $user->disableTwoFactor();
 
                 // Effacer la vérification de session
@@ -295,6 +317,17 @@ class TwoFactorAuthenticationController extends Controller
                     'success' => false,
                     'message' => '2FA non activée'
                 ], 400);
+            }
+
+            $request->validate([
+                'current_password' => 'required|string',
+            ]);
+
+            if (!Hash::check((string) $request->input('current_password'), $user->password)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Mot de passe actuel incorrect',
+                ], 422);
             }
 
             $recoveryCodes = $user->generateNewRecoveryCodes();
@@ -346,9 +379,17 @@ class TwoFactorAuthenticationController extends Controller
             }
 
             if ($user->verifyRecoveryCode($request->recovery_code)) {
+                $agent = new Agent();
+
                 // Marquer comme vérifié dans la session
                 session(['2fa_verified' => true]);
                 session(['2fa_verified_at' => now()]);
+
+                $user->forceFill([
+                    'two_factor_verified_at' => now(),
+                    'trusted_device_ip' => $request->ip(),
+                    'trusted_device_agent' => $agent->browser() . ' on ' . $agent->platform(),
+                ])->save();
 
                 Log::warning('Code de récupération utilisé:', [
                     'user_id' => $user->id,

@@ -117,7 +117,7 @@ class UserController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
-                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif,webp,svg|max:5120'
+                'avatar' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120'
             ]);
 
             if ($validator->fails()) {

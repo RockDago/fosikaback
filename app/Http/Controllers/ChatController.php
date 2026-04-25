@@ -261,14 +261,18 @@ class ChatController extends Controller
      * Route: throttle:chat (500/min)
      * ✅ OPTIMISATION: Cette méthode est appelée fréquemment par le polling
      */
-    public function getVisitorOnlineStatus($chatId)
+    public function getVisitorOnlineStatus(Request $request, $chatId)
     {
         try {
             // ✅ OPTIMISATION: Cache court pour réduire la charge DB
-            $cacheKey = "visitor_status_check_{$chatId}";
+            $request->validate([
+                'reference' => 'required|string',
+            ]);
+
+            $cacheKey = "visitor_status_check_{$chatId}_" . sha1($request->reference);
             
-            return Cache::remember($cacheKey, 10, function() use ($chatId) {
-                $chat = Chat::findOrFail($chatId);
+            return Cache::remember($cacheKey, 10, function() use ($chatId, $request) {
+                $chat = Chat::where('reference', $request->reference)->findOrFail($chatId);
 
                 if (!$chat->reference) {
                     return response()->json([
@@ -318,13 +322,16 @@ class ChatController extends Controller
         $request->validate([
             'content' => 'required_without:file|string|max:1000',
             'type' => 'required|in:text,file,image,video',
+            'reference' => 'required|string',
             'sendername' => 'nullable|string|max:255',
             'senderemail' => 'nullable|email',
             'file' => 'required_if:type,file,image,video|file|max:25600',
         ]);
 
         try {
-            $chat = Chat::where('status', 'active')->findOrFail($chatId);
+            $chat = Chat::where('status', 'active')
+                ->where('reference', $request->reference)
+                ->findOrFail($chatId);
 
             DB::beginTransaction();
 
@@ -422,8 +429,8 @@ class ChatController extends Controller
                     'size' => $this->formatFileSize($message->filesize),
                     'filesize' => $message->filesize,
                     'type' => $message->filetype,
-                    'url' => url('api/files/public/' . basename($message->filepath)),
-                    'preview' => $message->type === 'image' ? url('api/files/public/' . basename($message->filepath)) : null,
+                    'url' => url('api/chat-files/public/' . rawurlencode(basename($message->filepath))),
+                    'preview' => $message->type === 'image' ? url('api/chat-files/public/' . rawurlencode(basename($message->filepath))) : null,
                 ];
             }
 
@@ -461,15 +468,23 @@ class ChatController extends Controller
      * Route: throttle:public (200/min)
      * ✅ OPTIMISATION: Cache ajouté
      */
-    public function showPublic($id)
+    public function showPublic(Request $request, $id)
     {
         // ✅ OPTIMISATION: Cache de 5 secondes pour les visiteurs
-        $cacheKey = "chat_public_view_{$id}";
+        $reference = (string) $request->query('reference', '');
+        $cacheKey = "chat_public_view_{$id}_" . sha1($reference);
         
-        return Cache::remember($cacheKey, 5, function() use ($id) {
+        return Cache::remember($cacheKey, 5, function() use ($id, $reference) {
             $chat = Chat::with(['report', 'messages' => function($q) {
                 $q->where('is_public', true)->orderBy('created_at', 'asc');
-            }])->findOrFail($id);
+            }])->where('status', 'active')->findOrFail($id);
+
+            if (!$reference || !hash_equals((string) $chat->reference, $reference)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Acces non autorise a cette conversation',
+                ], 403);
+            }
 
             $report = $chat->report;
             $isAnonymous = empty($report->name) || $report->name === 'Anonyme';
@@ -489,8 +504,8 @@ class ChatController extends Controller
                                 'size' => $this->formatFileSize($message->filesize),
                                 'filesize' => $message->filesize,
                                 'type' => $message->filetype,
-                                'url' => url('api/files/public/' . basename($message->filepath)),
-                                'preview' => $message->type === 'image' ? url('api/files/public/' . basename($message->filepath)) : null,
+                                'url' => url('api/chat-files/public/' . rawurlencode(basename($message->filepath))),
+                                'preview' => $message->type === 'image' ? url('api/chat-files/public/' . rawurlencode(basename($message->filepath))) : null,
                             ];
                         }
 
@@ -523,10 +538,16 @@ class ChatController extends Controller
      * Marquer les messages du support comme lus (pour visiteurs)
      * Route: throttle:public (200/min)
      */
-    public function markPublicAsRead($id)
+    public function markPublicAsRead(Request $request, $id)
     {
         try {
-            $chat = Chat::where('status', 'active')->findOrFail($id);
+            $request->validate([
+                'reference' => 'required|string',
+            ]);
+
+            $chat = Chat::where('status', 'active')
+                ->where('reference', $request->reference)
+                ->findOrFail($id);
 
             $chat->messages()
                 ->whereNotNull('sender_id')
@@ -608,6 +629,34 @@ class ChatController extends Controller
     public function servePublicFile($filename)
     {
         $filename = basename($filename);
+
+        if ($filename === '' || str_contains($filename, "\0")) {
+            return response()->json(['message' => 'Nom de fichier invalide'], 400);
+        }
+
+        $message = Message::whereNotNull('file_path')
+            ->where('file_path', 'LIKE', '%' . $filename)
+            ->get()
+            ->first(function ($message) use ($filename) {
+                return basename((string) $message->filepath) === $filename;
+            });
+
+        if (!$message) {
+            return response()->json(['message' => 'Fichier non trouve'], 404);
+        }
+
+        $base = realpath(storage_path('app/public/chat_files'));
+        $filePath = realpath(storage_path('app/public/' . $message->filepath));
+
+        if (!$base || !$filePath || !str_starts_with($filePath, $base . DIRECTORY_SEPARATOR)) {
+            return response()->json(['message' => 'Fichier non trouve'], 404);
+        }
+
+        return response()->file($filePath, [
+            'Cache-Control' => 'public, max-age=31536000',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => 'sandbox',
+        ]);
 
         $base = storage_path('app/public/chat_files');
         if (!is_dir($base)) {
@@ -856,8 +905,8 @@ class ChatController extends Controller
                     'name' => $file->getClientOriginalName(),
                     'size' => $this->formatFileSize($file->getSize()),
                     'type' => $file->getMimeType(),
-                    'url' => url('api/files/public/' . basename($path)),
-                    'preview' => $request->type === 'image' ? url('api/files/public/' . basename($path)) : null,
+                    'url' => url('api/chat-files/public/' . rawurlencode(basename($path))),
+                    'preview' => $request->type === 'image' ? url('api/chat-files/public/' . rawurlencode(basename($path))) : null,
                 ]
             ]);
         } catch (\Exception $e) {
@@ -1249,8 +1298,8 @@ class ChatController extends Controller
                 'size' => $this->formatFileSize($message->filesize),
                 'filesize' => $message->filesize,
                 'type' => $message->filetype,
-                'url' => url('api/files/public/' . basename($message->filepath)),
-                'preview' => $message->type === 'image' ? url('api/files/public/' . basename($message->filepath)) : null,
+                'url' => url('api/chat-files/public/' . rawurlencode(basename($message->filepath))),
+                'preview' => $message->type === 'image' ? url('api/chat-files/public/' . rawurlencode(basename($message->filepath))) : null,
             ];
         }
 

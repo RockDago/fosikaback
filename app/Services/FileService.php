@@ -17,7 +17,7 @@ class FileService
         $reference = $reference ?? 'REF-' . time();
         
         // D'abord chercher le fichier existant
-        $filePath = $this->findExistingFile($filename);
+        $filePath = $this->findExistingFile($filename, $reference);
         if ($filePath) {
             return $filePath;
         }
@@ -29,8 +29,10 @@ class FileService
     /**
      * Cherche un fichier existant
      */
-    public function findExistingFile($filename)
+    public function findExistingFile($filename, $reference = null)
     {
+        $filename = basename($filename);
+        
         $possiblePaths = [
             public_path('uploads/reports/' . $filename),
             public_path('storage/reports/' . $filename),
@@ -39,6 +41,14 @@ class FileService
             public_path('uploads/' . $filename),
             storage_path('app/public/' . $filename),
         ];
+        
+        // Ajouter les chemins avec référence si disponible
+        if ($reference) {
+            array_unshift($possiblePaths, 
+                storage_path('app/public/reports/' . $reference . '/' . $filename),
+                public_path('uploads/reports/' . $reference . '/' . $filename)
+            );
+        }
         
         foreach ($possiblePaths as $path) {
             if (file_exists($path) && filesize($path) > 0) {

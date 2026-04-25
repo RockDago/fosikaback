@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class Report extends Model
 {
@@ -22,6 +23,10 @@ class Report extends Model
         'workflow',
         'accept_terms',
         'accept_truth',
+        'has_proof',
+        'city',
+        'province',
+        'region',
         'assigned_to'
     ];
 
@@ -30,6 +35,7 @@ class Report extends Model
         'workflow' => 'array',
         'accept_terms' => 'boolean',
         'accept_truth' => 'boolean',
+        'has_proof' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime'
     ];
@@ -56,7 +62,9 @@ class Report extends Model
 
         static::creating(function ($report) {
             // Générer une référence unique
-            $report->reference = self::generateReference();
+            if (empty($report->reference)) {
+                $report->reference = self::generateReference();
+            }
         });
 
         static::created(function ($report) {
@@ -178,7 +186,7 @@ class Report extends Model
         
         // Prefix fixe demandé
         $fixedPrefix = "REF-{$dateStr}-FSK";
-        
+
         // Utiliser une transaction pour éviter les doublons en production
         return DB::transaction(function () use ($fixedPrefix) {
             // Récupérer toutes les références avec ce motif

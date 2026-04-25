@@ -4,34 +4,37 @@ namespace App\Observers;
 
 use App\Models\Report;
 use App\Services\NotificationService;
+use Illuminate\Support\Facades\Log;
 
 class ReportObserver
 {
     /**
-     * Déclenché automatiquement lors de la création d'un signalement.
+     * Declenche automatiquement lors de la creation d'un signalement.
      */
     public function created(Report $report): void
     {
-        // Notification principale pour tout nouveau signalement
-        NotificationService::notifyNewSignalement(
-            $report->reference,
-            [
-                'category'    => $report->category,
-                'region'      => $report->region,
-                'city'        => $report->city ?? null,
-                'priority'    => $report->priority ?? 'medium',
-                'created_at'  => $report->created_at,
-            ]
-        );
+        try {
+            NotificationService::notifyNewSignalement(
+                $report->reference,
+                [
+                    'category' => $report->category,
+                    'region' => $report->region,
+                    'city' => $report->city ?? null,
+                    'priority' => $report->priority ?? 'medium',
+                    'description' => $report->description,
+                    'type' => $report->type,
+                    'name' => $report->name,
+                    'created_at' => $report->created_at,
+                ]
+            );
 
-        // Si le signalement est urgent, créer une notification supplémentaire
-        if (isset($report->priority) && $report->priority === 'high') {
-            NotificationService::notifySignalementUrgent($report->reference);
+            if (isset($report->priority) && $report->priority === 'high') {
+                NotificationService::notifySignalementUrgent($report->reference);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Erreur notification nouveau signalement: ' . $e->getMessage(), [
+                'reference' => $report->reference,
+            ]);
         }
     }
-
-    /**
-     * Si tu veux plus tard logguer les updates / delete,
-     * tu peux ajouter updated(), deleted(), etc. ici.
-     */
 }

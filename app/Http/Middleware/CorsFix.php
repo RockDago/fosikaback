@@ -15,22 +15,22 @@ class CorsFix
      */
     public function handle(Request $request, Closure $next)
     {
-        $allowedOrigins = [
-            'http://localhost:3000',
-            'http://127.0.0.1:3000',
-            'https://fosika.mesupres.edu.mg',
-        ];
+        $allowedOrigins = config('cors.allowed_origins', []);
 
         $origin = $request->header('Origin');
-        $allowOrigin = in_array($origin, $allowedOrigins) ? $origin : $allowedOrigins[0];
+        $allowOrigin = in_array($origin, $allowedOrigins, true) ? $origin : null;
 
         $headers = [
-            'Access-Control-Allow-Origin' => $allowOrigin,
             'Access-Control-Allow-Methods' => 'POST, GET, OPTIONS, PUT, DELETE, PATCH',
             'Access-Control-Allow-Credentials' => 'true',
             'Access-Control-Max-Age' => '86400',
             'Access-Control-Allow-Headers' => 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token, Accept, Origin',
         ];
+
+        if ($allowOrigin) {
+            $headers['Access-Control-Allow-Origin'] = $allowOrigin;
+            $headers['Vary'] = 'Origin';
+        }
 
         // Gérer les requêtes OPTIONS (preflight)
         if ($request->isMethod('OPTIONS')) {

@@ -40,7 +40,7 @@ return [
     'providers' => [
         'users' => [
             'driver' => 'eloquent',
-            'model' => App\Models\User::class, // ✅ On pointe vers le vrai modèle User
+            'model' => App\Models\User::class, 
         ],
     ],
 
