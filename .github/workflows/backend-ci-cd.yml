@@ -80,6 +80,18 @@ jobs:
             php artisan down || true
 
             git fetch origin
+            backup_dir=".deploy-backups/$(date +%Y%m%d-%H%M%S)"
+            comm -12 \
+              <(git ls-files --others --exclude-standard | sort) \
+              <(git ls-tree -r --name-only "origin/${{ github.ref_name }}" | sort) \
+              | while read -r file; do
+                  if [ -n "$file" ] && [ -f "$file" ]; then
+                    mkdir -p "$backup_dir/$(dirname "$file")"
+                    mv "$file" "$backup_dir/$file"
+                    echo "Backed up untracked deploy-conflict file: $file -> $backup_dir/$file"
+                  fi
+                done
+
             git pull --ff-only origin "${{ github.ref_name }}"
 
             composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
