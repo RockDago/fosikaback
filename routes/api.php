@@ -55,7 +55,7 @@ Route::prefix('enseignants')->group(function () {
     Route::get('/metadata', [EnseignantController::class, 'getMetadata']);
     
     // Détails d'un enseignant (PUBLIC)
-    Route::get('/{id}', [EnseignantController::class, 'show']);
+    Route::get('/{id}', [EnseignantController::class, 'show'])->whereNumber('id');
     
     // Statistiques par établissement (PUBLIC)
     Route::get('/statistiques/global', [EnseignantController::class, 'statistiques']);
@@ -70,7 +70,7 @@ Route::prefix('universites')->group(function () {
     Route::get('/all', [UniversiteController::class, 'getAll']);
     
     // Détails d'une université (PUBLIC)
-    Route::get('/{id}', [UniversiteController::class, 'show']);
+    Route::get('/{id}', [UniversiteController::class, 'show'])->whereNumber('id');
 });
 
 Route::prefix('etablissements')->group(function () {
@@ -84,7 +84,7 @@ Route::prefix('etablissements')->group(function () {
     Route::get('/by-universite/{universiteId}', [EtablissementController::class, 'getByUniversite']);
     
     // Détails d'un établissement (PUBLIC)
-    Route::get('/{id}', [EtablissementController::class, 'show']);
+    Route::get('/{id}', [EtablissementController::class, 'show'])->whereNumber('id');
 });
 
 // ✅ ROUTES CHAT PUBLIQUES

@@ -382,17 +382,17 @@ class EnseignantController extends Controller
             ->when($universiteId, function($query) use ($universiteId) {
                 return $query->where('universite_id', $universiteId);
             })
-            ->selectRaw('
+            ->selectRaw("
                 etablissement_id,
                 COUNT(*) as total,
-                SUM(CASE WHEN corps = "AES" THEN 1 ELSE 0 END) as AES,
-                SUM(CASE WHEN corps = "MC" THEN 1 ELSE 0 END) as MC,
-                SUM(CASE WHEN corps = "PES" THEN 1 ELSE 0 END) as PES,
-                SUM(CASE WHEN corps = "PT" THEN 1 ELSE 0 END) as PT,
-                SUM(CASE WHEN corps = "PE" THEN 1 ELSE 0 END) as PE,
-                SUM(CASE WHEN sexe = "F" THEN 1 ELSE 0 END) as F,
-                SUM(CASE WHEN sexe = "M" THEN 1 ELSE 0 END) as M
-            ')
+                SUM(CASE WHEN corps = 'AES' THEN 1 ELSE 0 END) as AES,
+                SUM(CASE WHEN corps = 'MC' THEN 1 ELSE 0 END) as MC,
+                SUM(CASE WHEN corps = 'PES' THEN 1 ELSE 0 END) as PES,
+                SUM(CASE WHEN corps = 'PT' THEN 1 ELSE 0 END) as PT,
+                SUM(CASE WHEN corps = 'PE' THEN 1 ELSE 0 END) as PE,
+                SUM(CASE WHEN sexe = 'F' THEN 1 ELSE 0 END) as F,
+                SUM(CASE WHEN sexe = 'M' THEN 1 ELSE 0 END) as M
+            ")
             ->groupBy('etablissement_id')
             ->get();
 
@@ -410,17 +410,17 @@ class EnseignantController extends Controller
             ->when($universiteId, function($query) use ($universiteId) {
                 return $query->where('universite_id', $universiteId);
             })
-            ->selectRaw('
+            ->selectRaw("
                 etablissement_id,
                 COUNT(*) as total,
-                SUM(CASE WHEN corps = "AES" THEN 1 ELSE 0 END) as AES,
-                SUM(CASE WHEN corps = "MC" THEN 1 ELSE 0 END) as MC,
-                SUM(CASE WHEN corps = "PES" THEN 1 ELSE 0 END) as PES,
-                SUM(CASE WHEN corps = "PT" THEN 1 ELSE 0 END) as PT,
-                SUM(CASE WHEN corps = "PE" THEN 1 ELSE 0 END) as PE,
-                SUM(CASE WHEN sexe = "F" THEN 1 ELSE 0 END) as F,
-                SUM(CASE WHEN sexe = "M" THEN 1 ELSE 0 END) as M
-            ')
+                SUM(CASE WHEN corps = 'AES' THEN 1 ELSE 0 END) as AES,
+                SUM(CASE WHEN corps = 'MC' THEN 1 ELSE 0 END) as MC,
+                SUM(CASE WHEN corps = 'PES' THEN 1 ELSE 0 END) as PES,
+                SUM(CASE WHEN corps = 'PT' THEN 1 ELSE 0 END) as PT,
+                SUM(CASE WHEN corps = 'PE' THEN 1 ELSE 0 END) as PE,
+                SUM(CASE WHEN sexe = 'F' THEN 1 ELSE 0 END) as F,
+                SUM(CASE WHEN sexe = 'M' THEN 1 ELSE 0 END) as M
+            ")
             ->groupBy('etablissement_id')
             ->get()
             ->map(function($stat) {

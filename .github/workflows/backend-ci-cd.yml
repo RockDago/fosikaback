@@ -91,9 +91,30 @@ jobs:
             }
 
             fix_laravel_permissions() {
-              run_as_root mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
-              run_as_root chown -R "$USER":www-data storage bootstrap/cache
-              run_as_root chmod -R ug+rwX storage bootstrap/cache
+              run_as_root mkdir -p \
+                storage/app/public/reports \
+                storage/app/public/uploads \
+                storage/logs \
+                storage/framework/cache \
+                storage/framework/sessions \
+                storage/framework/views \
+                bootstrap/cache \
+                public/uploads/reports
+              run_as_root chown -R "$USER":www-data storage bootstrap/cache public/uploads
+              run_as_root chmod -R ug+rwX storage bootstrap/cache public/uploads
+            }
+
+            relink_public_storage() {
+              if [ -L public/storage ] || [ -f public/storage ]; then
+                run_as_root rm -f public/storage
+              elif [ -e public/storage ]; then
+                run_as_root mkdir -p "$backup_dir"
+                run_as_root mv public/storage "$backup_dir/public-storage"
+                echo "Backed up existing public/storage directory: public/storage -> $backup_dir/public-storage"
+              fi
+
+              php artisan storage:link --force
+              run_as_root chown -h www-data:www-data public/storage || true
             }
 
             fix_laravel_permissions
@@ -125,11 +146,10 @@ jobs:
             php artisan route:cache
             php artisan view:cache
 
-            run_as_root rm -f public/storage
-            php artisan storage:link
+            relink_public_storage
 
-            run_as_root chown -R www-data:www-data storage bootstrap/cache
-            run_as_root find storage bootstrap/cache -type d -exec chmod 775 {} \;
-            run_as_root find storage bootstrap/cache -type f -exec chmod 664 {} \;
+            run_as_root chown -R www-data:www-data storage bootstrap/cache public/uploads
+            run_as_root find storage bootstrap/cache public/uploads -type d -exec chmod 775 {} \;
+            run_as_root find storage bootstrap/cache public/uploads -type f -exec chmod 664 {} \;
 
             run_as_root php artisan up

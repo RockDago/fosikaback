@@ -13,6 +13,15 @@ class UniversiteController extends Controller
         return response()->json(Universite::with('etablissements')->get());
     }
 
+    public function getAll()
+    {
+        return response()->json(
+            Universite::with('etablissements')
+                ->orderBy('nom')
+                ->get()
+        );
+    }
+
     public function show($id)
     {
         return response()->json(Universite::with('etablissements')->findOrFail($id));

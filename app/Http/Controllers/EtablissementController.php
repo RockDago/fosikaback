@@ -19,6 +19,21 @@ class EtablissementController extends Controller
         return response()->json($query->get());
     }
 
+    public function getAll(Request $request)
+    {
+        return $this->index($request);
+    }
+
+    public function getByUniversite($universiteId)
+    {
+        return response()->json(
+            Etablissement::with('universite')
+                ->where('universite_id', $universiteId)
+                ->orderBy('nom')
+                ->get()
+        );
+    }
+
     public function show($id)
     {
         return response()->json(Etablissement::with('universite')->findOrFail($id));
