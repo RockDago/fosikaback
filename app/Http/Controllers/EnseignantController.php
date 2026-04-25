@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use App\Services\AuditLogger;
 
 class EnseignantController extends Controller
 {
@@ -200,6 +201,11 @@ class EnseignantController extends Controller
             DB::commit();
 
             Log::info('Enseignant créé avec succès:', ['id' => $enseignant->id, 'nom' => $enseignant->nom]);
+            AuditLogger::logCreation(
+                $request->user()->email ?? 'system',
+                'Enseignant',
+                "Creation de l'enseignant {$enseignant->nom} (ID: {$enseignant->id})"
+            );
 
             return response()->json([
                 'message' => 'Enseignant créé avec succès',
@@ -311,6 +317,11 @@ class EnseignantController extends Controller
                 'corps' => $dataToUpdate['corps'] ?? 'non modifié',
                 'categorie' => $dataToUpdate['categorie'] ?? 'non modifié'
             ]);
+            AuditLogger::logModification(
+                $request->user()->email ?? 'system',
+                'Enseignant',
+                "Modification de l'enseignant {$enseignant->nom} (ID: {$enseignant->id})"
+            );
 
             return response()->json([
                 'message' => 'Enseignant mis à jour avec succès',
@@ -340,6 +351,11 @@ class EnseignantController extends Controller
             $enseignant->delete();
 
             Log::info('Enseignant supprimé avec succès:', ['id' => $id, 'nom' => $nom]);
+            AuditLogger::logSuppression(
+                request()->user()->email ?? 'system',
+                'Enseignant',
+                "Suppression de l'enseignant {$nom} (ID: {$id})"
+            );
 
             return response()->json([
                 'message' => 'Enseignant supprimé avec succès'

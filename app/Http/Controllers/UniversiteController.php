@@ -2,22 +2,20 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Controller;
 use App\Models\Universite;
+use App\Services\AuditLogger;
 use Illuminate\Http\Request;
 
 class UniversiteController extends Controller
 {
     public function index()
     {
-        $universites = Universite::with('etablissements')->get();
-        return response()->json($universites);
+        return response()->json(Universite::with('etablissements')->get());
     }
 
     public function show($id)
     {
-        $universite = Universite::with('etablissements')->findOrFail($id);
-        return response()->json($universite);
+        return response()->json(Universite::with('etablissements')->findOrFail($id));
     }
 
     public function store(Request $request)
@@ -25,10 +23,17 @@ class UniversiteController extends Controller
         $validated = $request->validate([
             'nom' => 'required|string|max:255',
             'province' => 'required|string',
-            'code' => 'required|string|max:10'
+            'code' => 'required|string|max:10',
         ]);
 
         $universite = Universite::create($validated);
+
+        AuditLogger::logCreation(
+            $request->user()->email ?? 'system',
+            'Universite',
+            "Creation de l'universite {$universite->nom} (ID: {$universite->id})"
+        );
+
         return response()->json($universite, 201);
     }
 
@@ -39,17 +44,32 @@ class UniversiteController extends Controller
         $validated = $request->validate([
             'nom' => 'sometimes|string|max:255',
             'province' => 'sometimes|string',
-            'code' => 'sometimes|string|max:10'
+            'code' => 'sometimes|string|max:10',
         ]);
 
         $universite->update($validated);
+
+        AuditLogger::logModification(
+            $request->user()->email ?? 'system',
+            'Universite',
+            "Modification de l'universite {$universite->nom} (ID: {$universite->id})"
+        );
+
         return response()->json($universite);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
         $universite = Universite::findOrFail($id);
+        $nom = $universite->nom;
         $universite->delete();
-        return response()->json(['message' => 'Université supprimée avec succès']);
+
+        AuditLogger::logSuppression(
+            $request->user()->email ?? 'system',
+            'Universite',
+            "Suppression de l'universite {$nom} (ID: {$id})"
+        );
+
+        return response()->json(['message' => 'Universite supprimee avec succes']);
     }
 }

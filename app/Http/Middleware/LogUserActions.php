@@ -4,7 +4,6 @@ namespace App\Http\Middleware;
 use App\Services\AuditLogger;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 
 class LogUserActions
 {
@@ -16,8 +15,9 @@ class LogUserActions
             return $response;
         }
 
-        if (Auth::check()) {
-            $user = Auth::user();
+        $user = $request->user();
+
+        if ($user) {
 
             AuditLogger::logSystemAction(
                 $user->email,
@@ -167,8 +167,8 @@ class LogUserActions
             $details['params'] = $params;
         }
 
-        if (Auth::check()) {
-            $details['user_id'] = Auth::id();
+        if ($request->user()) {
+            $details['user_id'] = $request->user()->id;
         }
 
         return json_encode($details, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
