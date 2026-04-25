@@ -44,7 +44,8 @@ jobs:
       - name: Prepare Laravel environment
         run: |
           cp .env.example .env
-          php artisan key:generate --ansi
+          php -r "file_put_contents('.env', preg_replace('/^APP_KEY=.*/m', 'APP_KEY=base64:3RgxVt5yJ32/AXnB4Isx5V3N2vB0ok2WBmmUAcM4f64=', file_get_contents('.env')));"
+          php artisan config:clear --ansi
 
       - name: PHP syntax check
         run: |
