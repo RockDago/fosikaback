@@ -91,14 +91,14 @@ jobs:
             }
 
             fix_laravel_permissions() {
-              mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
+              run_as_root mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache
               run_as_root chown -R "$USER":www-data storage bootstrap/cache
               run_as_root chmod -R ug+rwX storage bootstrap/cache
             }
 
             fix_laravel_permissions
 
-            php artisan down || true
+            run_as_root php artisan down || true
 
             git fetch origin
             backup_dir=".deploy-backups/$(date +%Y%m%d-%H%M%S)"
@@ -107,8 +107,8 @@ jobs:
               <(git ls-tree -r --name-only "origin/${{ github.ref_name }}" | sort) \
               | while read -r file; do
                   if [ -n "$file" ] && [ -f "$file" ]; then
-                    mkdir -p "$backup_dir/$(dirname "$file")"
-                    mv "$file" "$backup_dir/$file"
+                    run_as_root mkdir -p "$backup_dir/$(dirname "$file")"
+                    run_as_root mv "$file" "$backup_dir/$file"
                     echo "Backed up untracked deploy-conflict file: $file -> $backup_dir/$file"
                   fi
                 done
@@ -125,10 +125,11 @@ jobs:
             php artisan route:cache
             php artisan view:cache
 
-            php artisan storage:link || true
+            run_as_root rm -f public/storage
+            php artisan storage:link
 
             run_as_root chown -R www-data:www-data storage bootstrap/cache
             run_as_root find storage bootstrap/cache -type d -exec chmod 775 {} \;
             run_as_root find storage bootstrap/cache -type f -exec chmod 664 {} \;
 
-            php artisan up
+            run_as_root php artisan up
